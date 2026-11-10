@@ -131,7 +131,7 @@ public sealed class DespachanteOutbox(IServiceScopeFactory scopes, PublicadorSqs
     }
 }
 
-// Consome ordem-servico.liberada.v1. Entrega pelo menos uma vez: a deduplicação persistida está em ExecucaoService.
+// Consome a fila de entrada: ordem-servico.liberada.v1 e execucao.cancelar.v1 (despacho por `tipo`). Entrega pelo menos uma vez: a deduplicação persistida está em ExecucaoService.
 public sealed class ConsumidorOsLiberada(IServiceScopeFactory scopes, IAmazonSQS sqs, IConfiguration config, ILogger<ConsumidorOsLiberada> logger, IAlertSink alerts, PoliticaRetentativa politica)
 {
     public async Task<int> ReceberLoteAsync(CancellationToken ct)
@@ -145,7 +145,8 @@ public sealed class ConsumidorOsLiberada(IServiceScopeFactory scopes, IAmazonSQS
     public async Task ProcessarAsync(Message mensagem, CancellationToken ct)
     {
         var fila = config["Sqs:LiberadasQueueUrl"] ?? throw new InvalidOperationException("Sqs:LiberadasQueueUrl não configurada.");
-        if (!EventoOsLiberada.TentarLer(mensagem.Body, out var evento))
+        var (eventId, aplicar) = Interpretar(mensagem.Body);
+        if (aplicar is null)
         {
             await EncaminharParaDlqAsync(mensagem, "execucao.evento_invalido", mensagem.MessageId ?? "sem-id", ct);
             await sqs.DeleteMessageAsync(new DeleteMessageRequest { QueueUrl = fila, ReceiptHandle = mensagem.ReceiptHandle }, ct);
@@ -156,15 +157,26 @@ public sealed class ConsumidorOsLiberada(IServiceScopeFactory scopes, IAmazonSQS
             await DependencyRetry.ExecuteAsync(async token =>
             {
                 using var scope = scopes.CreateScope();
-                await scope.ServiceProvider.GetRequiredService<ExecucaoService>().ReceberOsLiberadaAsync(evento!, token);
-            }, token => alerts.AlertarAsync("execucao.banco.exhausted", $"Tentativas esgotadas ao registrar o evento {evento!.EventId}.", token), ct, politica, FalhaTransitoria.EhTransitoria);
+                await aplicar(scope.ServiceProvider.GetRequiredService<ExecucaoService>(), token);
+            }, token => alerts.AlertarAsync("execucao.banco.exhausted", $"Tentativas esgotadas ao registrar o evento {eventId}.", token), ct, politica, FalhaTransitoria.EhTransitoria);
         }
         catch (Exception ex) when (ex is not OperationCanceledException && FalhaTransitoria.EhTransitoria(ex))
         {
-            logger.LogError(ex, "Evento {EventId} encaminhado à DLQ após esgotar as tentativas no banco.", evento!.EventId);
-            await EncaminharParaDlqAsync(mensagem, null, evento.EventId.ToString(), ct);
+            logger.LogError(ex, "Evento {EventId} encaminhado à DLQ após esgotar as tentativas no banco.", eventId);
+            await EncaminharParaDlqAsync(mensagem, null, eventId.ToString(), ct);
         }
         await sqs.DeleteMessageAsync(new DeleteMessageRequest { QueueUrl = fila, ReceiptHandle = mensagem.ReceiptHandle }, ct);
+    }
+
+    // Despacha pelo `tipo`; mensagem malformada ou de tipo desconhecido não tem operação (vai à DLQ de entrada).
+    private static (Guid EventId, Func<ExecucaoService, CancellationToken, Task>? Aplicar) Interpretar(string? corpo)
+    {
+        if (!LeitorJson.TentarLerObjeto(corpo, out var json) || !LeitorJson.TentarLerTexto(json, "tipo", 100, out var tipo)) return (Guid.Empty, null);
+        if (tipo == TiposEvento.OsLiberada && EventoOsLiberada.TentarLer(corpo, out var liberada))
+            return (liberada!.EventId, (service, token) => service.ReceberOsLiberadaAsync(liberada, token));
+        if (tipo == TiposEvento.ExecucaoCancelar && EventoCancelarExecucao.TentarLer(corpo, out var cancelar))
+            return (cancelar!.EventId, (service, token) => service.CancelarPorOsAsync(cancelar, token));
+        return (Guid.Empty, null);
     }
 
     private async Task EncaminharParaDlqAsync(Message mensagem, string? alerta, string referencia, CancellationToken ct)

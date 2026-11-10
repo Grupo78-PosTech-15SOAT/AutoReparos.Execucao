@@ -22,6 +22,7 @@ public sealed class ExecucaoDbContext(DbContextOptions<ExecucaoDbContext> option
         ordem.HasIndex(x => new { x.Estado, x.CriadaEm });
         ordem.Property(x => x.Estado).HasConversion<int>();
         ordem.Property(x => x.MotivoFalha).HasMaxLength(LimitesExecucao.TextoMaximo);
+        ordem.Property(x => x.MotivoCancelamento).HasMaxLength(LimitesExecucao.TextoMaximo);
         ordem.HasMany(x => x.Etapas).WithOne().HasForeignKey(x => x.OrdemExecucaoId);
         ordem.Navigation(x => x.Etapas).UsePropertyAccessMode(PropertyAccessMode.Field);
         ordem.HasMany(x => x.Reexecucoes).WithOne().HasForeignKey(x => x.OrdemExecucaoId);
@@ -66,7 +67,8 @@ public sealed class ExecucaoDbContext(DbContextOptions<ExecucaoDbContext> option
     }
 
     public Task<bool> EventoProcessadoAsync(Guid eventId, CancellationToken ct) => EventosProcessados.AnyAsync(x => x.EventId == eventId, ct);
-    public Task<bool> OrdemServicoNaFilaAsync(Guid ordemServicoId, CancellationToken ct) => Ordens.AnyAsync(x => x.OrdemServicoId == ordemServicoId, ct);
+    public Task<OrdemExecucao?> ObterPorOrdemServicoAsync(Guid ordemServicoId, CancellationToken ct) =>
+        Ordens.Include(x => x.Etapas).Include(x => x.Reexecucoes).SingleOrDefaultAsync(x => x.OrdemServicoId == ordemServicoId, ct);
     public void Adicionar(OrdemExecucao ordem) => Ordens.Add(ordem);
     public void Adicionar(EventoProcessado evento) => EventosProcessados.Add(evento);
     public void Adicionar(MensagemSaida mensagem) => MensagensSaida.Add(mensagem);

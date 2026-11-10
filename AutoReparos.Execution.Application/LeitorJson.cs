@@ -57,4 +57,14 @@ public static class LeitorJson
         return Propriedade(corpo, nome, out var elemento) && TentarLerString(elemento, out var texto)
             && texto!.Length == 36 && Guid.TryParseExact(texto, "D", out valor);
     }
+
+    // Campo opcional: ausente ou null vale nulo; presente precisa ser um GUID canônico não vazio.
+    public static bool TentarLerGuidOpcional(JsonElement corpo, string nome, out Guid? valor)
+    {
+        valor = null;
+        if (!Propriedade(corpo, nome, out var elemento) || elemento.ValueKind == JsonValueKind.Null) return true;
+        if (!TentarLerGuid(corpo, nome, out var guid) || guid == Guid.Empty) return false;
+        valor = guid;
+        return true;
+    }
 }

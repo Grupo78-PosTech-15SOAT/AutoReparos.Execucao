@@ -86,6 +86,7 @@ static object Projetar(OrdemExecucao o) => new
     o.OrdemServicoId,
     o.ClienteId,
     o.VeiculoId,
+    o.CorrelacaoId,
     status = o.Estado.ToString(),
     o.IntervencaoRequerida,
     o.MotivoFalha,
@@ -93,6 +94,8 @@ static object Projetar(OrdemExecucao o) => new
     o.AtualizadaEm,
     o.ConcluidaEm,
     o.FalhouEm,
+    o.CanceladaEm,
+    o.MotivoCancelamento,
     etapas = o.Etapas.OrderBy(e => e.Sequencia).Select(e => new { e.Id, e.Sequencia, tipo = e.Tipo.ToString(), e.Descricao, e.Responsavel, e.RegistradaEm })
 };
 

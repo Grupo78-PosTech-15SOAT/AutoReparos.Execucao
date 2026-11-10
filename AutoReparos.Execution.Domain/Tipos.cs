@@ -2,7 +2,7 @@ using System.Text;
 
 namespace AutoReparos.Execution.Domain;
 
-public enum EstadoExecucao { Fila = 0, EmExecucao = 1, Concluida = 2, Falhou = 3 }
+public enum EstadoExecucao { Fila = 0, EmExecucao = 1, Concluida = 2, Falhou = 3, Cancelada = 4 }
 public enum TipoEtapa { Diagnostico = 0, Reparo = 1 }
 
 public static class LimitesExecucao

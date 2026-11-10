@@ -8,6 +8,10 @@ public static class TiposEvento
     public const string OsLiberada = "ordem-servico.liberada.v1";
     public const string ExecucaoConcluida = "execucao.concluida.v1";
     public const string ExecucaoFalhou = "execucao.falhou.v1";
+    public const string ExecucaoCancelar = "execucao.cancelar.v1";
+    public const string ExecucaoCancelada = "execucao.cancelada.v1";
+    public const string ExecucaoCancelamentoRecusado = "execucao.cancelamento-recusado.v1";
+    public const string ExecucaoLiberacaoRecusada = "execucao.liberacao-recusada.v1";
 }
 
 public static class DestinosEvento
@@ -16,11 +20,12 @@ public static class DestinosEvento
     public const string Billing = "billing";
 }
 
-public enum ResultadoRecebimento { Enfileirada, Duplicada }
+public enum ResultadoRecebimento { Enfileirada, Duplicada, Recusada }
+public enum ResultadoCancelamento { Cancelada, Recusada, Duplicada }
 
-public sealed record EventoOsLiberada(Guid EventId, Guid OrdemServicoId, Guid ClienteId, Guid VeiculoId)
+public sealed record EventoOsLiberada(Guid EventId, Guid OrdemServicoId, Guid ClienteId, Guid VeiculoId, Guid? CorrelacaoId = null)
 {
-    // Contrato do OS Service (camelCase): eventId, tipo, id, clienteId, veiculoId. GUIDs só no formato canônico 8-4-4-4-12.
+    // Contrato do OS Service (camelCase): eventId, tipo, id, clienteId, veiculoId e, opcional, correlacaoId. GUIDs só no formato canônico 8-4-4-4-12.
     public static bool TentarLer(string? json, out EventoOsLiberada? evento)
     {
         evento = null;
@@ -29,8 +34,26 @@ public sealed record EventoOsLiberada(Guid EventId, Guid OrdemServicoId, Guid Cl
         if (!LeitorJson.TentarLerGuid(corpo, "eventId", out var eventId) || eventId == Guid.Empty
             || !LeitorJson.TentarLerGuid(corpo, "id", out var ordemId) || ordemId == Guid.Empty
             || !LeitorJson.TentarLerGuid(corpo, "clienteId", out var clienteId) || clienteId == Guid.Empty
-            || !LeitorJson.TentarLerGuid(corpo, "veiculoId", out var veiculoId) || veiculoId == Guid.Empty) return false;
-        evento = new EventoOsLiberada(eventId, ordemId, clienteId, veiculoId);
+            || !LeitorJson.TentarLerGuid(corpo, "veiculoId", out var veiculoId) || veiculoId == Guid.Empty
+            || !LeitorJson.TentarLerGuidOpcional(corpo, "correlacaoId", out var correlacaoId)) return false;
+        evento = new EventoOsLiberada(eventId, ordemId, clienteId, veiculoId, correlacaoId);
+        return true;
+    }
+}
+
+public sealed record EventoCancelarExecucao(Guid EventId, Guid OrdemServicoId, string Motivo, Guid? CorrelacaoId)
+{
+    // Comando do OS Service (camelCase): eventId, tipo, ordemServicoId, motivo e, opcional, correlacaoId.
+    public static bool TentarLer(string? json, out EventoCancelarExecucao? evento)
+    {
+        evento = null;
+        if (!LeitorJson.TentarLerObjeto(json, out var corpo)) return false;
+        if (!LeitorJson.TentarLerTexto(corpo, "tipo", 100, out var tipo) || tipo != TiposEvento.ExecucaoCancelar) return false;
+        if (!LeitorJson.TentarLerGuid(corpo, "eventId", out var eventId) || eventId == Guid.Empty
+            || !LeitorJson.TentarLerGuid(corpo, "ordemServicoId", out var ordemId) || ordemId == Guid.Empty
+            || !LeitorJson.TentarLerTexto(corpo, "motivo", LimitesExecucao.TextoMaximo, out var motivo)
+            || !LeitorJson.TentarLerGuidOpcional(corpo, "correlacaoId", out var correlacaoId)) return false;
+        evento = new EventoCancelarExecucao(eventId, ordemId, motivo!, correlacaoId);
         return true;
     }
 }
@@ -46,7 +69,7 @@ public interface IExecucaoStore
     Task<OrdemExecucao?> ObterAsync(Guid id, CancellationToken ct);
     Task<IReadOnlyList<OrdemExecucao>> ListarFilaAsync(IReadOnlyCollection<EstadoExecucao> estados, string? mecanico, CancellationToken ct);
     Task<bool> EventoProcessadoAsync(Guid eventId, CancellationToken ct);
-    Task<bool> OrdemServicoNaFilaAsync(Guid ordemServicoId, CancellationToken ct);
+    Task<OrdemExecucao?> ObterPorOrdemServicoAsync(Guid ordemServicoId, CancellationToken ct);
     void Adicionar(OrdemExecucao ordem);
     void Adicionar(EventoProcessado evento);
     void Adicionar(MensagemSaida mensagem);
@@ -62,9 +85,18 @@ public sealed class ExecucaoService(IExecucaoStore store, TimeProvider relogio)
     {
         if (await store.EventoProcessadoAsync(evento.EventId, ct)) return ResultadoRecebimento.Duplicada;
         var agora = relogio.GetUtcNow();
-        var jaNaFila = await store.OrdemServicoNaFilaAsync(evento.OrdemServicoId, ct);
+        var existente = await store.ObterPorOrdemServicoAsync(evento.OrdemServicoId, ct);
         store.Adicionar(new EventoProcessado { EventId = evento.EventId, ProcessadoEm = agora });
-        if (!jaNaFila) store.Adicionar(new OrdemExecucao(evento.OrdemServicoId, evento.ClienteId, evento.VeiculoId, agora));
+        // Regra de negócio: OS cuja execução já terminou (cancelada ou concluída) não volta à fila; o OS Service é avisado.
+        var motivoRecusa = existente?.Estado switch
+        {
+            EstadoExecucao.Cancelada => "Execução da OS já foi cancelada.",
+            EstadoExecucao.Concluida => "Execução da OS já foi concluída.",
+            _ => null
+        };
+        if (motivoRecusa is not null)
+            store.Adicionar(Resposta(TiposEvento.ExecucaoLiberacaoRecusada, evento.CorrelacaoId, evento.OrdemServicoId, null, motivoRecusa));
+        else if (existente is null) store.Adicionar(new OrdemExecucao(evento.OrdemServicoId, evento.ClienteId, evento.VeiculoId, agora, evento.CorrelacaoId));
         try { await store.SalvarAsync(ct); }
         catch (ConcorrenciaException)
         {
@@ -72,7 +104,33 @@ public sealed class ExecucaoService(IExecucaoStore store, TimeProvider relogio)
             store.DescartarAlteracoes();
             return ResultadoRecebimento.Duplicada;
         }
-        return jaNaFila ? ResultadoRecebimento.Duplicada : ResultadoRecebimento.Enfileirada;
+        return motivoRecusa is not null ? ResultadoRecebimento.Recusada : existente is not null ? ResultadoRecebimento.Duplicada : ResultadoRecebimento.Enfileirada;
+    }
+
+    // Compensação da Saga. Refaz a leitura quando outra operação altera a execução ao mesmo tempo; a entrega repetida é coberta pela deduplicação por eventId.
+    public async Task<ResultadoCancelamento> CancelarPorOsAsync(EventoCancelarExecucao evento, CancellationToken ct)
+    {
+        for (var tentativa = 1; ; tentativa++)
+        {
+            if (await store.EventoProcessadoAsync(evento.EventId, ct)) return ResultadoCancelamento.Duplicada;
+            var agora = relogio.GetUtcNow();
+            var ordem = await store.ObterPorOrdemServicoAsync(evento.OrdemServicoId, ct);
+            store.Adicionar(new EventoProcessado { EventId = evento.EventId, ProcessadoEm = agora });
+            string? recusa = ordem?.Estado switch
+            {
+                null => "Execução da OS não encontrada.",
+                EstadoExecucao.Concluida => "Execução já concluída não pode ser cancelada.",
+                EstadoExecucao.Falhou => "Execução em falha aguarda intervenção e não pode ser cancelada.",
+                _ => null
+            };
+            // Cancelamento repetido com outro eventId confirma de novo, sem alterar a execução.
+            if (recusa is null && ordem!.Estado != EstadoExecucao.Cancelada) ordem.Cancelar(evento.Motivo, agora);
+            var tipo = recusa is null ? TiposEvento.ExecucaoCancelada : TiposEvento.ExecucaoCancelamentoRecusado;
+            store.Adicionar(Resposta(tipo, evento.CorrelacaoId ?? ordem?.CorrelacaoId, evento.OrdemServicoId, ordem?.Id, recusa));
+            try { await store.SalvarAsync(ct); }
+            catch (ConcorrenciaException) when (tentativa < 3) { store.DescartarAlteracoes(); continue; }
+            return recusa is null ? ResultadoCancelamento.Cancelada : ResultadoCancelamento.Recusada;
+        }
     }
 
     public async Task<IReadOnlyList<OrdemExecucao>> ListarFilaAsync(IReadOnlyCollection<EstadoExecucao>? estados, string? mecanico, CancellationToken ct) =>
@@ -96,6 +154,8 @@ public sealed class ExecucaoService(IExecucaoStore store, TimeProvider relogio)
         {
             eventId,
             tipo = TiposEvento.ExecucaoConcluida,
+            correlacaoId = ordem.CorrelacaoId,
+            ocorreuEm = relogio.GetUtcNow(),
             id = ordem.Id,
             ordemServicoId = ordem.OrdemServicoId,
             clienteId = ordem.ClienteId,
@@ -117,6 +177,8 @@ public sealed class ExecucaoService(IExecucaoStore store, TimeProvider relogio)
         {
             eventId,
             tipo = TiposEvento.ExecucaoFalhou,
+            correlacaoId = ordem.CorrelacaoId,
+            ocorreuEm = relogio.GetUtcNow(),
             id = ordem.Id,
             ordemServicoId = ordem.OrdemServicoId,
             clienteId = ordem.ClienteId,
@@ -135,6 +197,23 @@ public sealed class ExecucaoService(IExecucaoStore store, TimeProvider relogio)
         ordem.Reexecutar(motivo, supervisor, relogio.GetUtcNow());
         await store.SalvarAsync(ct);
         return ordem;
+    }
+
+    // Resposta para o OS Service no envelope comum da Saga; `execucaoId` só aparece quando a execução existe e `motivo` só nas recusas.
+    private MensagemSaida Resposta(string tipo, Guid? correlacaoId, Guid ordemServicoId, Guid? execucaoId, string? motivo)
+    {
+        var eventId = Guid.NewGuid();
+        var corpo = new Dictionary<string, object?>
+        {
+            ["eventId"] = eventId,
+            ["tipo"] = tipo,
+            ["correlacaoId"] = correlacaoId,
+            ["ordemServicoId"] = ordemServicoId,
+            ["ocorreuEm"] = relogio.GetUtcNow()
+        };
+        if (execucaoId is not null) corpo["execucaoId"] = execucaoId;
+        if (motivo is not null) corpo["motivo"] = motivo;
+        return NovaMensagem(eventId, DestinosEvento.OsService, tipo, JsonSerializer.Serialize(corpo));
     }
 
     private MensagemSaida NovaMensagem(Guid eventId, string destino, string tipo, string conteudo) =>
