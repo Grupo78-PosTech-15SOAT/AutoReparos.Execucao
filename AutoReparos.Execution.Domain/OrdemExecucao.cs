@@ -66,12 +66,12 @@ public sealed class OrdemExecucao
         return registro;
     }
 
-    // Cancelamento (compensação da Saga): só em Fila ou EmExecucao; as etapas já registradas são preservadas.
+    // Cancelamento (compensação da Saga): em Fila, EmExecucao ou Falhou (a intervenção deixa de ser necessária); as etapas já registradas são preservadas.
     public void Cancelar(string motivo, DateTimeOffset em)
     {
-        if (Estado is not (EstadoExecucao.Fila or EstadoExecucao.EmExecucao)) throw new TransicaoInvalidaException($"Execução em estado {Estado} não pode ser cancelada.");
+        if (Estado is not (EstadoExecucao.Fila or EstadoExecucao.EmExecucao or EstadoExecucao.Falhou)) throw new TransicaoInvalidaException($"Execução em estado {Estado} não pode ser cancelada.");
         MotivoCancelamento = Texto.Validar(motivo, LimitesExecucao.TextoMaximo, nameof(motivo));
-        Estado = EstadoExecucao.Cancelada; CanceladaEm = em; Tocar(em);
+        Estado = EstadoExecucao.Cancelada; IntervencaoRequerida = false; CanceladaEm = em; Tocar(em);
     }
 
     private void Tocar(DateTimeOffset em) { AtualizadaEm = em; Revisao++; }

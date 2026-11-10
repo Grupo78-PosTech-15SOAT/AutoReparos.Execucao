@@ -60,7 +60,7 @@ Sem `status`, a fila devolve as execuções que ainda pedem ação (`Fila`, `EmE
 
 `Fila` -> (primeira etapa) `EmExecucao` -> `Concluida`, ou `Falhou` (`intervencaoRequerida = true`). A reexecução só é aceita em `Falhou`: preserva todas as etapas, registra motivo, supervisor e horário e volta a execução para `EmExecucao` (ou `Fila` se não havia etapas). Etapas só entram em `Fila` ou `EmExecucao`; concluir exige `EmExecucao`.
 
-`Cancelada` é um estado final, alcançado só pelo comando `execucao.cancelar.v1` (não há rota HTTP de cancelamento) a partir de `Fila` ou `EmExecucao`; as etapas já registradas são preservadas, junto com o motivo (`motivoCancelamento`) e o horário (`canceladaEm`). Uma execução `Cancelada` sai da fila padrão e recusa etapas, conclusão, falha e reexecução com `409 execucao_estado_invalido`.
+`Cancelada` é um estado final, alcançado só pelo comando `execucao.cancelar.v1` (não há rota HTTP de cancelamento) a partir de `Fila`, `EmExecucao` ou `Falhou`; as etapas já registradas são preservadas, junto com o motivo (`motivoCancelamento`) e o horário (`canceladaEm`). Uma execução `Cancelada` sai da fila padrão e recusa etapas, conclusão, falha e reexecução com `409 execucao_estado_invalido`.
 
 ### Erros
 
@@ -118,10 +118,9 @@ Comando da Saga (compensação da etapa 2), na mesma fila e no mesmo consumidor:
 
 | Estado atual | Resultado | Resposta ao OS Service |
 | --- | --- | --- |
-| `Fila` ou `EmExecucao` | vai a `Cancelada`, preservando as etapas | `execucao.cancelada.v1` |
+| `Fila`, `EmExecucao` ou `Falhou` | vai a `Cancelada`, preservando as etapas (em `Falhou`, a intervenção deixa de ser necessária e a reexecução passa a dar `409 execucao_estado_invalido`) | `execucao.cancelada.v1` |
 | `Cancelada` (comando repetido com outro `eventId`) | nada muda; o primeiro motivo é mantido | `execucao.cancelada.v1` |
 | `Concluida` | recusado | `execucao.cancelamento-recusado.v1` |
-| `Falhou` (aguarda intervenção; o contrato só prevê cancelar `Fila` e `EmExecucao`) | recusado | `execucao.cancelamento-recusado.v1` |
 | inexistente | recusado | `execucao.cancelamento-recusado.v1` (sem `execucaoId`) |
 
 A deduplicação é persistida por `eventId` na mesma tabela `eventos_processados`, e a resposta é gravada no outbox na mesma transação. Entrega repetida ou concorrente do mesmo `eventId` cancela uma vez e responde uma vez. Se outra operação alterar a execução durante o cancelamento (concorrência por `xmin`), o serviço refaz a leitura (até 3 tentativas) em vez de perder o comando.

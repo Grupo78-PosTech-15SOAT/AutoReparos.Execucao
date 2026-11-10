@@ -103,7 +103,7 @@ public sealed class DominioTests
     }
 
     [Fact]
-    public void CancellationOnlyFromQueueOrInProgressAndKeepsStages()
+    public void CancellationFromQueueInProgressOrFailedAndKeepsStages()
     {
         var fila = Nova();
         fila.Cancelar("  Cliente desistiu ", T0.AddHours(1));
@@ -126,7 +126,8 @@ public sealed class DominioTests
         Assert.Throws<TransicaoInvalidaException>(() => concluida.Cancelar("Tarde", T0));
         var falhou = Nova();
         falhou.Falhar("Peça quebrada", T0);
-        Assert.Throws<TransicaoInvalidaException>(() => falhou.Cancelar("Tarde", T0));
+        falhou.Cancelar("Cancelada após falha", T0.AddHours(1));
+        Assert.Equal((EstadoExecucao.Cancelada, false, "Cancelada após falha"), (falhou.Estado, falhou.IntervencaoRequerida, falhou.MotivoCancelamento));
         var vazia = Nova();
         Assert.Throws<ArgumentException>(() => vazia.Cancelar(" ", T0));
         Assert.Equal((EstadoExecucao.Fila, (string?)null), (vazia.Estado, vazia.MotivoCancelamento));

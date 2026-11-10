@@ -108,16 +108,31 @@ public sealed class CancelamentoExecucaoTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task ExecutionCancellation_RefusesFailedExecutionAwaitingIntervention()
+    public async Task ExecutionCancellation_CancelsFailedExecutionKeepingStagesAndBlocksReexecution()
     {
         using var ambiente = await Ambiente.CriarAsync(postgres);
-        var ordem = await ambiente.Fabrica.SemearAsync(o => o.Falhar("Peça quebrada", DateTimeOffset.UtcNow));
+        var ordem = await ambiente.Fabrica.SemearAsync(o =>
+        {
+            o.RegistrarEtapa(TipoEtapa.Diagnostico, "Checar suspensão", "mec-1", DateTimeOffset.UtcNow);
+            o.RegistrarEtapa(TipoEtapa.Reparo, "Trocar amortecedor", "mec-2", DateTimeOffset.UtcNow);
+            o.Falhar("Peça quebrada", DateTimeOffset.UtcNow);
+        });
+        Guid correlacao = Guid.NewGuid();
 
-        await ambiente.Consumidor.ProcessarAsync(Mensagens.Cancelar(Guid.NewGuid(), ordem.OrdemServicoId), CancellationToken.None);
+        await ambiente.Consumidor.ProcessarAsync(Mensagens.Cancelar(Guid.NewGuid(), ordem.OrdemServicoId, "Orçamento cancelado pelo cliente", correlacao), CancellationToken.None);
 
-        Assert.Equal(EstadoExecucao.Falhou, (await ambiente.Fabrica.NoBancoAsync(db => db.Ordens.AsNoTracking().SingleAsync())).Estado);
+        var salva = await ambiente.Fabrica.NoBancoAsync(db => db.Ordens.AsNoTracking().Include(o => o.Etapas).SingleAsync());
+        Assert.Equal((EstadoExecucao.Cancelada, "Orçamento cancelado pelo cliente", (DateTimeOffset?)Agora), (salva.Estado, salva.MotivoCancelamento, salva.CanceladaEm));
+        Assert.Equal([(1, "Checar suspensão", "mec-1"), (2, "Trocar amortecedor", "mec-2")], salva.Etapas.OrderBy(e => e.Sequencia).Select(e => (e.Sequencia, e.Descricao, e.Responsavel)).ToArray());
         var saida = Assert.Single(await SaidaAsync(ambiente));
-        Assert.Equal(Esperado(saida, "execucao.cancelamento-recusado.v1", null, ordem.OrdemServicoId, ordem.Id, "Execução em falha aguarda intervenção e não pode ser cancelada."), saida.Conteudo);
+        Assert.Equal("execucao.cancelada.v1", saida.Tipo);
+        Assert.Equal(Esperado(saida, "execucao.cancelada.v1", correlacao.ToString(), ordem.OrdemServicoId, ordem.Id, null), saida.Conteudo);
+
+        using var supervisor = ambiente.Fabrica.Cliente("Administrador");
+        var resposta = await supervisor.PostAsJsonAsync($"/api/v1/execucoes/{ordem.Id}/reexecucao", new { motivo = "Tentar de novo" });
+        Assert.Equal(HttpStatusCode.Conflict, resposta.StatusCode);
+        Assert.Equal("execucao_estado_invalido", (await resposta.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("codigo").GetString());
+        Assert.Equal(EstadoExecucao.Cancelada, (await ambiente.Fabrica.NoBancoAsync(db => db.Ordens.AsNoTracking().SingleAsync())).Estado);
     }
 
     [Fact]

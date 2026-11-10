@@ -120,7 +120,6 @@ public sealed class ExecucaoService(IExecucaoStore store, TimeProvider relogio)
             {
                 null => "Execução da OS não encontrada.",
                 EstadoExecucao.Concluida => "Execução já concluída não pode ser cancelada.",
-                EstadoExecucao.Falhou => "Execução em falha aguarda intervenção e não pode ser cancelada.",
                 _ => null
             };
             // Cancelamento repetido com outro eventId confirma de novo, sem alterar a execução.
