@@ -101,4 +101,54 @@ public sealed class DominioTests
         Assert.False(EventoOsLiberada.TentarLer(json.Replace("liberada", "criada"), out _));
         Assert.False(EventoOsLiberada.TentarLer(null, out _));
     }
+
+    [Fact]
+    public void CancellationOnlyFromQueueOrInProgressAndKeepsStages()
+    {
+        var fila = Nova();
+        fila.Cancelar("  Cliente desistiu ", T0.AddHours(1));
+        Assert.Equal((EstadoExecucao.Cancelada, "Cliente desistiu", (DateTimeOffset?)T0.AddHours(1), T0.AddHours(1), 1), (fila.Estado, fila.MotivoCancelamento, fila.CanceladaEm, fila.AtualizadaEm, fila.Revisao));
+
+        var emExecucao = Nova();
+        emExecucao.RegistrarEtapa(TipoEtapa.Reparo, "Reparo", "mec-1", T0);
+        emExecucao.Cancelar("Cliente desistiu", T0.AddHours(1));
+        Assert.Equal((EstadoExecucao.Cancelada, 1, 2), (emExecucao.Estado, emExecucao.Etapas.Count, emExecucao.Revisao));
+
+        Assert.Throws<TransicaoInvalidaException>(() => fila.Cancelar("Outra vez", T0));
+        Assert.Throws<TransicaoInvalidaException>(() => fila.RegistrarEtapa(TipoEtapa.Reparo, "Tarde", "mec-1", T0));
+        Assert.Throws<TransicaoInvalidaException>(() => fila.Falhar("Tarde", T0));
+        Assert.Throws<TransicaoInvalidaException>(() => fila.Concluir(T0));
+        Assert.Throws<TransicaoInvalidaException>(() => fila.Reexecutar("Tarde", "sup", T0));
+
+        var concluida = Nova();
+        concluida.RegistrarEtapa(TipoEtapa.Reparo, "Reparo", "mec-1", T0);
+        concluida.Concluir(T0);
+        Assert.Throws<TransicaoInvalidaException>(() => concluida.Cancelar("Tarde", T0));
+        var falhou = Nova();
+        falhou.Falhar("Peça quebrada", T0);
+        Assert.Throws<TransicaoInvalidaException>(() => falhou.Cancelar("Tarde", T0));
+        var vazia = Nova();
+        Assert.Throws<ArgumentException>(() => vazia.Cancelar(" ", T0));
+        Assert.Equal((EstadoExecucao.Fila, (string?)null), (vazia.Estado, vazia.MotivoCancelamento));
+    }
+
+    [Fact]
+    public void CancelCommandParsingAcceptsOnlyTheCanonicalContract()
+    {
+        Guid evento = Guid.NewGuid(), os = Guid.NewGuid(), correlacao = Guid.NewGuid();
+        var json = $"{{\"eventId\":\"{evento}\",\"tipo\":\"execucao.cancelar.v1\",\"correlacaoId\":\"{correlacao}\",\"ordemServicoId\":\"{os}\",\"ocorreuEm\":\"2026-11-10T12:00:00Z\",\"motivo\":\"Cliente desistiu\"}}";
+        Assert.True(EventoCancelarExecucao.TentarLer(json, out var lido));
+        Assert.Equal(new EventoCancelarExecucao(evento, os, "Cliente desistiu", correlacao), lido);
+        Assert.True(EventoCancelarExecucao.TentarLer(json.Replace($"\"correlacaoId\":\"{correlacao}\",", ""), out var semCorrelacao));
+        Assert.Null(semCorrelacao!.CorrelacaoId);
+        Assert.True(EventoCancelarExecucao.TentarLer(json.Replace($"\"{correlacao}\"", "null"), out var nula));
+        Assert.Null(nula!.CorrelacaoId);
+        Assert.False(EventoCancelarExecucao.TentarLer(json.Replace(correlacao.ToString(), correlacao.ToString("N")), out _));
+        Assert.False(EventoCancelarExecucao.TentarLer(json.Replace(os.ToString(), os.ToString("N")), out _));
+        Assert.False(EventoCancelarExecucao.TentarLer(json.Replace("Cliente desistiu", ""), out _));
+        Assert.False(EventoCancelarExecucao.TentarLer(json.Replace("execucao.cancelar.v1", "ordem-servico.liberada.v1"), out _));
+        Assert.False(EventoCancelarExecucao.TentarLer(null, out _));
+        Assert.True(EventoOsLiberada.TentarLer($"{{\"eventId\":\"{evento}\",\"tipo\":\"ordem-servico.liberada.v1\",\"correlacaoId\":\"{correlacao}\",\"id\":\"{os}\",\"clienteId\":\"{Guid.NewGuid()}\",\"veiculoId\":\"{Guid.NewGuid()}\"}}", out var liberada));
+        Assert.Equal(correlacao, liberada!.CorrelacaoId);
+    }
 }

@@ -26,7 +26,7 @@ namespace AutoReparos.Execution.Tests.Suporte;
 // Um contêiner PostgreSQL por execução; cada teste recebe um banco novo e migrado.
 public sealed class PostgresFixture : IAsyncLifetime
 {
-    private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:16-alpine").Build();
+    private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:16-alpine").WithCommand("-c", "max_connections=500").Build();
     public Task InitializeAsync() => _postgres.StartAsync();
     public async Task DisposeAsync() => await _postgres.DisposeAsync();
 
@@ -210,11 +210,20 @@ public static class Mensagens
 {
     public const string TipoLiberada = "ordem-servico.liberada.v1";
 
-    public static Amazon.SQS.Model.Message Liberada(Guid eventId, Guid ordemServicoId, Guid? clienteId = null, Guid? veiculoId = null, string tipo = TipoLiberada) => new()
+    public static Amazon.SQS.Model.Message Liberada(Guid eventId, Guid ordemServicoId, Guid? clienteId = null, Guid? veiculoId = null, string tipo = TipoLiberada, Guid? correlacaoId = null) => new()
     {
         MessageId = "msg-" + eventId,
         ReceiptHandle = "recibo-" + eventId,
-        Body = JsonSerializer.Serialize(new { eventId, tipo, id = ordemServicoId, clienteId = clienteId ?? Guid.NewGuid(), veiculoId = veiculoId ?? Guid.NewGuid() })
+        Body = JsonSerializer.Serialize(new { eventId, tipo, correlacaoId, id = ordemServicoId, clienteId = clienteId ?? Guid.NewGuid(), veiculoId = veiculoId ?? Guid.NewGuid() })
+    };
+
+    public const string TipoCancelar = "execucao.cancelar.v1";
+
+    public static Amazon.SQS.Model.Message Cancelar(Guid eventId, Guid ordemServicoId, string motivo = "Orçamento cancelado pelo cliente", Guid? correlacaoId = null) => new()
+    {
+        MessageId = "msg-" + eventId,
+        ReceiptHandle = "recibo-" + eventId,
+        Body = JsonSerializer.Serialize(new { eventId, tipo = TipoCancelar, correlacaoId, ordemServicoId, ocorreuEm = "2026-11-13T12:00:00Z", motivo })
     };
 
     public static StringContent Json(string corpo) => new(corpo, System.Text.Encoding.UTF8, "application/json");
@@ -248,5 +257,5 @@ public sealed class Ambiente : IDisposable
         };
     }
 
-    public void Dispose() => Fabrica.Dispose();
+    public void Dispose() { Fabrica.Dispose(); NpgsqlConnection.ClearAllPools(); }
 }

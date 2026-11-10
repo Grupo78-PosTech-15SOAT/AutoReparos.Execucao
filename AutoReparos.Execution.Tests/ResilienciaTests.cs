@@ -190,7 +190,7 @@ public sealed class ResilienciaTests(PostgresFixture postgres)
         }
         public Task<OrdemExecucao?> ObterAsync(Guid id, CancellationToken ct) => real.ObterAsync(id, ct);
         public Task<IReadOnlyList<OrdemExecucao>> ListarFilaAsync(IReadOnlyCollection<EstadoExecucao> estados, string? mecanico, CancellationToken ct) => real.ListarFilaAsync(estados, mecanico, ct);
-        public Task<bool> OrdemServicoNaFilaAsync(Guid ordemServicoId, CancellationToken ct) => real.OrdemServicoNaFilaAsync(ordemServicoId, ct);
+        public Task<OrdemExecucao?> ObterPorOrdemServicoAsync(Guid ordemServicoId, CancellationToken ct) => real.ObterPorOrdemServicoAsync(ordemServicoId, ct);
         public void Adicionar(OrdemExecucao ordem) => real.Adicionar(ordem);
         public void Adicionar(EventoProcessado evento) => real.Adicionar(evento);
         public void Adicionar(MensagemSaida mensagem) => real.Adicionar(mensagem);
