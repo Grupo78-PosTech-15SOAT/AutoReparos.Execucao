@@ -191,3 +191,19 @@ dotnet format AutoReparos.Execucao.slnx --verify-no-changes --no-restore
 Filtros usados pelos checks da feature: `ReleasedOrderQueuedOnce` (C1), `ExecutionStageHistory` (C2), `CompletionPublishedToConsumers` (C3, projeto de integração), `ManualReexecutionPreservesStages` (C4), `DuplicateEventDeduplication` (C5) e `DependencyRetryExhaustion` (C6). Os testes da Saga (cancelamento, liberação recusada e correlação) ficam em `CancelamentoExecucaoTests`, com os filtros `ExecutionCancellation`, `ReleaseRefusal` e `SagaCorrelation`.
 
 Para publicar a imagem: `docker build -t autoreparos-execution .` neste diretório.
+
+## CI/CD e configuração do repositório
+
+O pipeline `.github/workflows/ci-cd.yml` roda em pull request para `main` e em push na `develop` e na `main`, com os jobs `build` (compila e confere `dotnet format`), `test` (testes de `AutoReparos.Execucao.Tests` e `AutoReparos.Execucao.IntegrationTests`, cobertura mínima de linhas de 80%) e `quality` (SonarCloud).
+
+Para o job `quality` passar, o repositório precisa destes itens em **Settings → Secrets and variables → Actions**:
+
+| Nome | Onde criar | Obrigatório | Valor |
+| --- | --- | --- | --- |
+| `SONAR_TOKEN` | aba **Secrets** (do repositório ou da organização, com acesso a este repositório) | sim: sem ele o job `quality` falha de propósito | token gerado no SonarCloud em *My Account → Security*, por quem pode analisar os projetos da organização |
+| `SONAR_ORGANIZATION` | aba **Variables** | não | padrão `grupo78-postech-15soat` |
+| `SONAR_PROJECT_KEY` | aba **Variables** | não | padrão `Grupo78-PosTech-15SOAT_AutoReparos.Execucao` |
+
+O projeto `Grupo78-PosTech-15SOAT_AutoReparos.Execucao` precisa existir no SonarCloud (ou o token precisa poder criá-lo). Nunca versione o token. Depois de criar o secret, reexecute o job `quality` da última execução; não é preciso novo commit.
+
+Quando a proteção da `main` for aplicada (AD-026 do repositório pai), os jobs `build`, `test` e `quality` serão os status checks obrigatórios.
