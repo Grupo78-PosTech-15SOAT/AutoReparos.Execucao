@@ -1,8 +1,0 @@
-<Solution>
-  <Project Path="AutoReparos.Execution.Api/AutoReparos.Execution.Api.csproj" />
-  <Project Path="AutoReparos.Execution.Application/AutoReparos.Execution.Application.csproj" />
-  <Project Path="AutoReparos.Execution.Domain/AutoReparos.Execution.Domain.csproj" />
-  <Project Path="AutoReparos.Execution.Infrastructure/AutoReparos.Execution.Infrastructure.csproj" />
-  <Project Path="AutoReparos.Execution.IntegrationTests/AutoReparos.Execution.IntegrationTests.csproj" />
-  <Project Path="AutoReparos.Execution.Tests/AutoReparos.Execution.Tests.csproj" />
-</Solution>

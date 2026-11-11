@@ -1,4 +1,4 @@
-name: Execution CI
+name: Execucao CI
 
 on:
   pull_request:
@@ -20,8 +20,8 @@ jobs:
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
           dotnet-version: 10.0.x
-      - run: dotnet restore AutoReparos.Execution.slnx
-      - run: dotnet build AutoReparos.Execution.slnx --no-restore -m:1 -c Release
-      - run: dotnet test AutoReparos.Execution.Tests --no-build --no-restore -m:1 -c Release
-      - run: dotnet test AutoReparos.Execution.IntegrationTests --no-build --no-restore -m:1 -c Release
-      - run: dotnet format AutoReparos.Execution.slnx --verify-no-changes --no-restore
+      - run: dotnet restore AutoReparos.Execucao.slnx
+      - run: dotnet build AutoReparos.Execucao.slnx --no-restore -m:1 -c Release
+      - run: dotnet test AutoReparos.Execucao.Tests --no-build --no-restore -m:1 -c Release
+      - run: dotnet test AutoReparos.Execucao.IntegrationTests --no-build --no-restore -m:1 -c Release
+      - run: dotnet format AutoReparos.Execucao.slnx --verify-no-changes --no-restore

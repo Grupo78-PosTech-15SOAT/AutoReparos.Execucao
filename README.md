@@ -1,16 +1,16 @@
-# AutoReparos Execution
+# AutoReparos Execução
 
-Serviço autônomo da Fase 4 que conduz as ordens de serviço liberadas: fila de execução, etapas de diagnóstico e reparo, conclusão, falha com intervenção, reexecução manual e cancelamento comandado pela Saga do OS Service. Ele tem banco PostgreSQL próprio (usuário e database exclusivos) e não lê o banco do OS Service nem do Billing; toda integração acontece por eventos no AWS SQS.
+Serviço autônomo da Fase 4 que conduz as ordens de serviço liberadas: fila de execução, etapas de diagnóstico e reparo, conclusão, falha com intervenção, reexecução manual e cancelamento comandado pela Saga do OS Service. Ele tem banco PostgreSQL próprio (usuário e database exclusivos) e não lê o banco do OS Service nem do Cobrança; toda integração acontece por eventos no AWS SQS.
 
 ## Arquitetura
 
 | Projeto | Responsabilidade |
 | --- | --- |
-| `AutoReparos.Execution.Domain` | `OrdemExecucao`, `EtapaExecucao`, `ReexecucaoExecucao`, outbox (`MensagemSaida`) e eventos processados. Regras de transição no agregado. |
-| `AutoReparos.Execution.Application` | `ExecucaoService`, contratos, leitura estrita de JSON (`LeitorJson`) e o contrato do evento de entrada. |
-| `AutoReparos.Execution.Infrastructure` | `ExecucaoDbContext` (EF Core + Npgsql), migrações escritas à mão, consumidor SQS, despachante do outbox, publicador SQS e `DependencyRetry`. |
-| `AutoReparos.Execution.Api` | Minimal API, autenticação JWT, telemetria OTLP e os serviços em segundo plano. |
-| `AutoReparos.Execution.Tests` / `.IntegrationTests` | Provas de comportamento com PostgreSQL real (Testcontainers) e SQS falso. |
+| `AutoReparos.Execucao.Domain` | `OrdemExecucao`, `EtapaExecucao`, `ReexecucaoExecucao`, outbox (`MensagemSaida`) e eventos processados. Regras de transição no agregado. |
+| `AutoReparos.Execucao.Application` | `ExecucaoService`, contratos, leitura estrita de JSON (`LeitorJson`) e o contrato do evento de entrada. |
+| `AutoReparos.Execucao.Infrastructure` | `ExecucaoDbContext` (EF Core + Npgsql), migrações escritas à mão, consumidor SQS, despachante do outbox, publicador SQS e `DependencyRetry`. |
+| `AutoReparos.Execucao.Api` | Minimal API, autenticação JWT, telemetria OTLP e os serviços em segundo plano. |
+| `AutoReparos.Execucao.Tests` / `.IntegrationTests` | Provas de comportamento com PostgreSQL real (Testcontainers) e SQS falso. |
 
 A concorrência é otimista por `xmin` (coluna de sistema do PostgreSQL). Toda mudança no agregado incrementa `Revisao`, então até o registro de uma etapa (inserção filha) altera a linha pai. Dois pedidos simultâneos sobre a mesma execução resultam em um sucesso e um `409` com `codigo: conflito_concorrencia`.
 
@@ -20,20 +20,20 @@ Informe por variáveis de ambiente ou gerenciador de segredos. Nunca versione to
 
 | Chave | Finalidade |
 | --- | --- |
-| `ConnectionStrings__Execucao` | Conexão com o banco PostgreSQL do Execution |
+| `ConnectionStrings__Execucao` | Conexão com o banco PostgreSQL do Execução |
 | `Authentication__Authority` / `Authentication__Audience` | Emissor e audiência do JWT |
 | `Authentication__RequireHttpsMetadata` | `false` apenas em ambiente local; o padrão é `true` |
 | `AWS_REGION` | Região do SQS |
 | `Sqs__LiberadasQueueUrl` | Fila de entrada com `ordem-servico.liberada.v1` e `execucao.cancelar.v1` |
 | `Sqs__LiberadasDeadLetterQueueUrl` | DLQ da fila de entrada |
 | `Sqs__OsServiceQueueUrl` | Fila de saída consumida pelo OS Service (conclusão, falha e respostas da Saga) |
-| `Sqs__BillingQueueUrl` | Fila de saída consumida pelo Billing |
+| `Sqs__BillingQueueUrl` | Fila de saída consumida pelo Cobrança |
 | `Sqs__DeadLetterQueueUrl` | DLQ de saída, comum aos dois destinos |
 | `Telemetry__OtlpEndpoint` | Coletor OTLP (padrão `http://localhost:4317`) |
 | `Telemetry__ServiceName` | Valor de `service.name` (padrão `autoreparos-execution`) |
 | `BackgroundServices__Enabled` | `false` desliga o consumidor e o publicador (padrão `true`) |
 
-A telemetria (traces, métricas e logs) exporta com `service.name` e `deployment.environment.name` (nome do ambiente ASP.NET Core). O serviço aplica as migrações na inicialização; provisione o banco e o papel do Execution sem acesso às tabelas de OS e Billing.
+A telemetria (traces, métricas e logs) exporta com `service.name` e `deployment.environment.name` (nome do ambiente ASP.NET Core). O serviço aplica as migrações na inicialização; provisione o banco e o papel do Execução sem acesso às tabelas de OS e Cobrança.
 
 ## Papéis e autenticação
 
@@ -127,7 +127,7 @@ A deduplicação é persistida por `eventId` na mesma tabela `eventos_processado
 
 ### Saída: `execucao.concluida.v1`
 
-Publicado quando a execução conclui, para o OS Service e para o Billing. Há **uma linha de outbox por consumidor**, gravada na mesma transação da conclusão, com o **mesmo `eventId`** e uma fila por destino (`Sqs__OsServiceQueueUrl` e `Sqs__BillingQueueUrl`); cada consumidor deduplica pelo `eventId` do seu lado.
+Publicado quando a execução conclui, para o OS Service e para o Cobrança. Há **uma linha de outbox por consumidor**, gravada na mesma transação da conclusão, com o **mesmo `eventId`** e uma fila por destino (`Sqs__OsServiceQueueUrl` e `Sqs__BillingQueueUrl`); cada consumidor deduplica pelo `eventId` do seu lado.
 
 ```json
 {
@@ -181,11 +181,11 @@ Os alertas hoje são registros de log `Critical` (`LoggingAlertSink`); ligue-os 
 As provas usam Docker (imagem `postgres:16-alpine` via Testcontainers) e um `IAmazonSQS` falso: não precisam de AWS nem de variáveis de ambiente.
 
 ```sh
-dotnet restore AutoReparos.Execution.slnx
-dotnet build AutoReparos.Execution.slnx -m:1
-dotnet test AutoReparos.Execution.Tests
-dotnet test AutoReparos.Execution.IntegrationTests
-dotnet format AutoReparos.Execution.slnx --verify-no-changes --no-restore
+dotnet restore AutoReparos.Execucao.slnx
+dotnet build AutoReparos.Execucao.slnx -m:1
+dotnet test AutoReparos.Execucao.Tests
+dotnet test AutoReparos.Execucao.IntegrationTests
+dotnet format AutoReparos.Execucao.slnx --verify-no-changes --no-restore
 ```
 
 Filtros usados pelos checks da feature: `ReleasedOrderQueuedOnce` (C1), `ExecutionStageHistory` (C2), `CompletionPublishedToConsumers` (C3, projeto de integração), `ManualReexecutionPreservesStages` (C4), `DuplicateEventDeduplication` (C5) e `DependencyRetryExhaustion` (C6). Os testes da Saga (cancelamento, liberação recusada e correlação) ficam em `CancelamentoExecucaoTests`, com os filtros `ExecutionCancellation`, `ReleaseRefusal` e `SagaCorrelation`.
