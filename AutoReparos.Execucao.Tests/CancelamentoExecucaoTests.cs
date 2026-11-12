@@ -498,21 +498,13 @@ public sealed class CancelamentoExecucaoTests(PostgresFixture postgres)
     private sealed class Contador { public int Chamadas; }
 
     // Delega ao banco real, mas falha nas primeiras leituras de eventos.
-    private sealed class ArmazenamentoInstavel(ExecucaoDbContext real, Contador contador, int falhas, Func<Exception> erro) : IExecucaoStore
+    private sealed class ArmazenamentoInstavel(ExecucaoDbContext real, Contador contador, int falhas, Func<Exception> erro) : ArmazenamentoDelegante(real)
     {
-        public Task<bool> EventoProcessadoAsync(Guid eventId, CancellationToken ct)
+        public override Task<bool> EventoProcessadoAsync(Guid eventId, CancellationToken ct)
         {
             if (Interlocked.Increment(ref contador.Chamadas) <= falhas) throw erro();
-            return real.EventoProcessadoAsync(eventId, ct);
+            return base.EventoProcessadoAsync(eventId, ct);
         }
-        public Task<OrdemExecucao?> ObterAsync(Guid id, CancellationToken ct) => real.ObterAsync(id, ct);
-        public Task<IReadOnlyList<OrdemExecucao>> ListarFilaAsync(IReadOnlyCollection<EstadoExecucao> estados, string? mecanico, CancellationToken ct) => real.ListarFilaAsync(estados, mecanico, ct);
-        public Task<OrdemExecucao?> ObterPorOrdemServicoAsync(Guid ordemServicoId, CancellationToken ct) => real.ObterPorOrdemServicoAsync(ordemServicoId, ct);
-        public void Adicionar(OrdemExecucao ordem) => real.Adicionar(ordem);
-        public void Adicionar(EventoProcessado evento) => real.Adicionar(evento);
-        public void Adicionar(MensagemSaida mensagem) => real.Adicionar(mensagem);
-        public void DescartarAlteracoes() => real.DescartarAlteracoes();
-        public Task SalvarAsync(CancellationToken ct) => real.SalvarAsync(ct);
     }
 
     private async Task<(Ambiente Ambiente, Contador Contador)> AmbienteInstavelAsync(int falhas, Func<Exception> erro)
