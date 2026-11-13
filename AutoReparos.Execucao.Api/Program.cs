@@ -37,6 +37,7 @@ builder.Services.AddDbContext<ExecucaoDbContext>(o => o.UseNpgsql(builder.Config
 builder.Services.AddScoped<IExecucaoStore>(sp => sp.GetRequiredService<ExecucaoDbContext>());
 builder.Services.AddScoped<ExecucaoService>();
 builder.Services.AddScoped<EstoqueService>();
+builder.Services.AddScoped<ReprocessadorDlq>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<IAmazonSQS, AmazonSQSClient>();
 builder.Services.AddSingleton<IAlertSink, LoggingAlertSink>();
@@ -57,6 +58,7 @@ builder.Services.AddAuthorization(options =>
     options.AddPolicy("OperarExecucao", p => p.RequireRole("Mecanico", "Administrador"));
     options.AddPolicy("ReexecutarExecucao", p => p.RequireRole("Administrador"));
     options.AddPolicy("AdministrarCatalogo", p => p.RequireRole("Administrador"));
+    options.AddPolicy("AdministrarDlq", p => p.RequireRole("Administrador"));
     options.AddPolicy("RegistrarEntradaInsumo", p => p.RequireRole("Administrador", "Atendente"));
 });
 
@@ -218,6 +220,14 @@ app.MapPost("/api/v1/insumos/{id:guid}/entradas", async (Guid id, HttpContext co
     catch (KeyNotFoundException) { return Results.NotFound(new { codigo = "insumo_nao_encontrado" }); }
     catch (ArgumentException) { return Results.UnprocessableEntity(new { codigo = "entrada_invalida" }); }
 }).RequireAuthorization("RegistrarEntradaInsumo");
+
+app.MapPost("/api/v1/admin/dlq/reprocessar", async (HttpContext context, ReprocessadorDlq reprocessador, CancellationToken ct) =>
+{
+    var corpo = await CorpoJson.LerObjetoAsync(context.Request, ct);
+    if (corpo is null || !corpo.Value.TryGetProperty("quantidade", out var q) || !q.TryGetInt32(out var quantidade) || quantidade < 1 || quantidade > ReprocessadorDlq.QuantidadeMaxima)
+        return Results.UnprocessableEntity(new { codigo = "quantidade_invalida" });
+    return Results.Ok(await reprocessador.ReprocessarAsync(quantidade, Identidade(context.User) ?? "desconhecido", ct));
+}).RequireAuthorization("AdministrarDlq");
 
 app.Run();
 public partial class Program;
