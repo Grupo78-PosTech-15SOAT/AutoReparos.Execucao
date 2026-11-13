@@ -63,7 +63,7 @@ public sealed class ReprocessaDlqTests(PostgresFixture postgres)
 
         var resposta = await admin.PostAsJsonAsync("/api/v1/admin/dlq/reprocessar", new { quantidade = 3 });
 
-        Assert.Equal(HttpStatusCode.OK, resposta.StatusCode);
+        Assert.Equal(HttpStatusCode.Accepted, resposta.StatusCode);
         var corpo = await resposta.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal((3, 3), (corpo.GetProperty("solicitadas").GetInt32(), corpo.GetProperty("reprocessadas").GetInt32()));
         // A concluída vai ao OS e à Cobrança (mesmo eventId nos dois); as demais só ao OS.
@@ -76,11 +76,12 @@ public sealed class ReprocessaDlqTests(PostgresFixture postgres)
     }
 
     [Theory]
+    [InlineData(null, "{\"quantidade\":1}", HttpStatusCode.Unauthorized)]
     [InlineData("Atendente", "{\"quantidade\":1}", HttpStatusCode.Forbidden)]
     [InlineData("Administrador", "{\"quantidade\":0}", HttpStatusCode.UnprocessableEntity)]
     [InlineData("Administrador", "{\"quantidade\":101}", HttpStatusCode.UnprocessableEntity)]
     [InlineData("Administrador", "{}", HttpStatusCode.UnprocessableEntity)]
-    public async Task ReprocessaDlqDaExecucao_RecusaPapelEQuantidadeInvalidos(string papel, string corpo, HttpStatusCode esperado)
+    public async Task ReprocessaDlqDaExecucao_RecusaPapelEQuantidadeInvalidos(string? papel, string corpo, HttpStatusCode esperado)
     {
         var (ambiente, sqs) = await CriarAsync();
         using var _ = ambiente;

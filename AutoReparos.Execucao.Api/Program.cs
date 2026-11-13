@@ -226,7 +226,7 @@ app.MapPost("/api/v1/admin/dlq/reprocessar", async (HttpContext context, Reproce
     var corpo = await CorpoJson.LerObjetoAsync(context.Request, ct);
     if (corpo is null || !corpo.Value.TryGetProperty("quantidade", out var q) || !q.TryGetInt32(out var quantidade) || quantidade < 1 || quantidade > ReprocessadorDlq.QuantidadeMaxima)
         return Results.UnprocessableEntity(new { codigo = "quantidade_invalida" });
-    return Results.Ok(await reprocessador.ReprocessarAsync(quantidade, Identidade(context.User) ?? "desconhecido", ct));
+    return Results.Accepted(value: await reprocessador.ReprocessarAsync(quantidade, Identidade(context.User) ?? "desconhecido", ct));
 }).RequireAuthorization("AdministrarDlq");
 
 app.Run();
