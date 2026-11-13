@@ -131,7 +131,7 @@ public sealed class DespachanteOutbox(IServiceScopeFactory scopes, PublicadorSqs
     }
 }
 
-// Consome a fila de entrada: ordem-servico.liberada.v1 e execucao.cancelar.v1 (despacho por `tipo`). Entrega pelo menos uma vez: a deduplicação persistida está em ExecucaoService.
+// Consome a fila de entrada: ordem-servico.liberada.v1, execucao.cancelar.v1, execucao.reservar-insumos.v1 e execucao.cancelar-reserva.v1 (despacho por `tipo`). Entrega pelo menos uma vez: a deduplicação persistida está em ExecucaoService.
 public sealed class ConsumidorOsLiberada(IServiceScopeFactory scopes, IAmazonSQS sqs, IConfiguration config, ILogger<ConsumidorOsLiberada> logger, IAlertSink alerts, PoliticaRetentativa politica)
 {
     public async Task<int> ReceberLoteAsync(CancellationToken ct)
@@ -157,7 +157,7 @@ public sealed class ConsumidorOsLiberada(IServiceScopeFactory scopes, IAmazonSQS
             await DependencyRetry.ExecuteAsync(async token =>
             {
                 using var scope = scopes.CreateScope();
-                await aplicar(scope.ServiceProvider.GetRequiredService<ExecucaoService>(), token);
+                await aplicar(scope.ServiceProvider, token);
             }, token => alerts.AlertarAsync("execucao.banco.exhausted", $"Tentativas esgotadas ao registrar o evento {eventId}.", token), ct, politica, FalhaTransitoria.EhTransitoria);
         }
         catch (Exception ex) when (ex is not OperationCanceledException && FalhaTransitoria.EhTransitoria(ex))
@@ -169,13 +169,17 @@ public sealed class ConsumidorOsLiberada(IServiceScopeFactory scopes, IAmazonSQS
     }
 
     // Despacha pelo `tipo`; mensagem malformada ou de tipo desconhecido não tem operação (vai à DLQ de entrada).
-    private static (Guid EventId, Func<ExecucaoService, CancellationToken, Task>? Aplicar) Interpretar(string? corpo)
+    private static (Guid EventId, Func<IServiceProvider, CancellationToken, Task>? Aplicar) Interpretar(string? corpo)
     {
         if (!LeitorJson.TentarLerObjeto(corpo, out var json) || !LeitorJson.TentarLerTexto(json, "tipo", 100, out var tipo)) return (Guid.Empty, null);
         if (tipo == TiposEvento.OsLiberada && EventoOsLiberada.TentarLer(corpo, out var liberada))
-            return (liberada!.EventId, (service, token) => service.ReceberOsLiberadaAsync(liberada, token));
+            return (liberada!.EventId, (scope, token) => scope.GetRequiredService<ExecucaoService>().ReceberOsLiberadaAsync(liberada, token));
         if (tipo == TiposEvento.ExecucaoCancelar && EventoCancelarExecucao.TentarLer(corpo, out var cancelar))
-            return (cancelar!.EventId, (service, token) => service.CancelarPorOsAsync(cancelar, token));
+            return (cancelar!.EventId, (scope, token) => scope.GetRequiredService<ExecucaoService>().CancelarPorOsAsync(cancelar, token));
+        if (tipo == TiposEvento.ReservarInsumos && EventoReservarInsumos.TentarLer(corpo, out var reservar))
+            return (reservar!.EventId, (scope, token) => scope.GetRequiredService<EstoqueService>().ReservarAsync(reservar, token));
+        if (tipo == TiposEvento.CancelarReserva && EventoCancelarReserva.TentarLer(corpo, out var cancelarReserva))
+            return (cancelarReserva!.EventId, (scope, token) => scope.GetRequiredService<EstoqueService>().CancelarReservaAsync(cancelarReserva, token));
         return (Guid.Empty, null);
     }
 
