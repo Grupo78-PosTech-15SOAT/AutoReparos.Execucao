@@ -12,6 +12,11 @@ public static class TiposEvento
     public const string ExecucaoCancelada = "execucao.cancelada.v1";
     public const string ExecucaoCancelamentoRecusado = "execucao.cancelamento-recusado.v1";
     public const string ExecucaoLiberacaoRecusada = "execucao.liberacao-recusada.v1";
+    public const string ReservarInsumos = "execucao.reservar-insumos.v1";
+    public const string CancelarReserva = "execucao.cancelar-reserva.v1";
+    public const string InsumosReservados = "insumos.reservados.v1";
+    public const string InsumosReservaFalhou = "insumos.reserva-falhou.v1";
+    public const string InsumosReservaCancelada = "insumos.reserva-cancelada.v1";
 }
 
 public static class DestinosEvento
@@ -73,6 +78,22 @@ public interface IExecucaoStore
     void Adicionar(OrdemExecucao ordem);
     void Adicionar(EventoProcessado evento);
     void Adicionar(MensagemSaida mensagem);
+    // Catálogo, insumos e reservas. Os métodos de saldo abrem a transação, que o SalvarAsync confirma junto com Inbox e Outbox.
+    // Serializa por OS (trava de transação): comandos de reserva ou cancelamento da mesma OS nunca se intercalam.
+    Task BloquearOrdemAsync(Guid ordemServicoId, CancellationToken ct);
+    Task<IReadOnlyList<ReservaInsumo>> ListarReservasAsync(Guid ordemServicoId, CancellationToken ct);
+    // Reserva todos os itens (`UPDATE ... WHERE disponivel >= q`); se algum faltar, desfaz tudo e devolve os itens em falta.
+    Task<IReadOnlyList<ItemEmFalta>> ReservarSaldoAsync(IReadOnlyList<ItemReserva> itens, CancellationToken ct);
+    Task DevolverSaldoAsync(IReadOnlyCollection<ReservaInsumo> reservas, CancellationToken ct);
+    Task BaixarReservadoAsync(IReadOnlyCollection<ReservaInsumo> reservas, CancellationToken ct);
+    Task<bool> AdicionarSaldoAsync(Guid insumoId, int quantidade, CancellationToken ct);
+    Task<Insumo?> ObterInsumoAsync(Guid id, CancellationToken ct);
+    Task<IReadOnlyList<Insumo>> ListarInsumosAsync(string? nome, CancellationToken ct);
+    Task<IReadOnlyList<ServicoCatalogo>> ListarServicosAsync(string? nome, CancellationToken ct);
+    void Adicionar(ReservaInsumo reserva);
+    void Adicionar(MovimentacaoInsumo movimentacao);
+    void Adicionar(Insumo insumo);
+    void Adicionar(ServicoCatalogo servico);
     void DescartarAlteracoes();
     Task SalvarAsync(CancellationToken ct);
 }
@@ -146,7 +167,12 @@ public sealed class ExecucaoService(IExecucaoStore store, TimeProvider relogio)
     public async Task<OrdemExecucao> ConcluirAsync(Guid id, CancellationToken ct)
     {
         var ordem = await store.ObterAsync(id, ct) ?? throw new KeyNotFoundException();
-        ordem.Concluir(relogio.GetUtcNow());
+        var agora = relogio.GetUtcNow();
+        ordem.Concluir(agora);
+        // Confirma as reservas (baixa definitiva) na mesma transação da conclusão.
+        var reservas = (await store.ListarReservasAsync(ordem.OrdemServicoId, ct)).Where(r => r.Status == StatusReserva.Reservada).ToList();
+        foreach (var reserva in reservas) reserva.Confirmar(agora);
+        await store.BaixarReservadoAsync(reservas, ct);
         // Mesmo eventId para os dois consumidores; cada destino tem sua própria linha no outbox.
         var eventId = Guid.NewGuid();
         var conteudo = JsonSerializer.Serialize(new

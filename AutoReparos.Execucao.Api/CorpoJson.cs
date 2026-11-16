@@ -20,6 +20,30 @@ internal static class CorpoJson
         }
     }
 
+    // Nome, descrição opcional (null ou ausente vale nulo) e preço unitário decimal; a regra de faixa é do domínio.
+    public static bool TentarLerCatalogo(JsonElement corpo, out string? nome, out string? descricao, out decimal preco)
+    {
+        descricao = null; preco = 0;
+        if (!LeitorJson.TentarLerTexto(corpo, "nome", LimitesCatalogo.NomeMaximo, out nome)) return false;
+        if (LeitorJson.Propriedade(corpo, "descricao", out var d) && d.ValueKind != JsonValueKind.Null
+            && (!LeitorJson.TentarLerString(d, out descricao) || string.IsNullOrWhiteSpace(descricao) || descricao!.Length > LimitesCatalogo.DescricaoMaxima || descricao.Contains((char)0))) return false;
+        return LeitorJson.Propriedade(corpo, "precoUnitario", out var p) && p.ValueKind == JsonValueKind.Number && p.TryGetDecimal(out preco);
+    }
+
+    public static bool TentarLerInteiro(JsonElement corpo, string nome, out int valor)
+    {
+        valor = 0;
+        return LeitorJson.Propriedade(corpo, nome, out var e) && e.ValueKind == JsonValueKind.Number && e.TryGetInt32(out valor);
+    }
+
+    // Campo opcional: ausente ou null vale o padrão; presente precisa ser inteiro entre o padrão (mínimo) e o saldo máximo.
+    public static bool TentarLerInteiroOpcional(JsonElement corpo, string nome, int padrao, out int valor)
+    {
+        valor = padrao;
+        if (!LeitorJson.Propriedade(corpo, nome, out var e) || e.ValueKind == JsonValueKind.Null) return true;
+        return TentarLerInteiro(corpo, nome, out valor) && valor >= padrao && valor <= LimitesCatalogo.QuantidadeMaxima;
+    }
+
     public static bool TentarLerTipoEtapa(JsonElement corpo, out TipoEtapa tipo)
     {
         tipo = default;
