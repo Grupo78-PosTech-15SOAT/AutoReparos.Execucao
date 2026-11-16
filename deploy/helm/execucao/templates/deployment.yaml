@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "servico.nome" . }}
+  labels:
+    {{- include "servico.rotulos" . | nindent 4 }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      {{- include "servico.seletor" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "servico.rotulos" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "servico.nome" . }}
+      {{- include "servico.seguranca" . | nindent 6 }}
+      containers:
+        - name: {{ include "servico.nome" . }}
+          image: {{ include "servico.imagem" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "servico.segurancaContainer" . | nindent 10 }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: Production
+            - name: AWS_REGION
+              value: {{ .Values.aws.regiao | quote }}
+            - name: Database__SkipStartupMigration
+              value: "true"
+            {{- include "servico.conexao" . | nindent 12 }}
+            {{- include "servico.env" . | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 4
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

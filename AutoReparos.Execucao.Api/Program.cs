@@ -35,7 +35,10 @@ builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 
 builder.Services.AddOpenApi();
 builder.Services.AddDbContext<ExecucaoDbContext>(o => o.UseNpgsql(builder.Configuration.GetConnectionString("Execucao")));
 builder.Services.AddScoped<IExecucaoStore>(sp => sp.GetRequiredService<ExecucaoDbContext>());
+builder.Services.AddHealthChecks().AddDbContextCheck<ExecucaoDbContext>();
 builder.Services.AddScoped<ExecucaoService>();
+builder.Services.AddScoped<EstoqueService>();
+builder.Services.AddScoped<ReprocessadorDlq>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<IAmazonSQS, AmazonSQSClient>();
 builder.Services.AddSingleton<IAlertSink, LoggingAlertSink>();
@@ -55,10 +58,14 @@ builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("OperarExecucao", p => p.RequireRole("Mecanico", "Administrador"));
     options.AddPolicy("ReexecutarExecucao", p => p.RequireRole("Administrador"));
+    options.AddPolicy("AdministrarCatalogo", p => p.RequireRole("Administrador"));
+    options.AddPolicy("AdministrarDlq", p => p.RequireRole("Administrador"));
+    options.AddPolicy("RegistrarEntradaInsumo", p => p.RequireRole("Administrador", "Atendente"));
 });
 
 var app = builder.Build();
-if (!app.Environment.IsEnvironment("Testing"))
+if (app.Configuration.GetValue<bool>(MigracaoBancoDados.MigrarESair)) return await MigracaoBancoDados.MigrarESairAsync<ExecucaoDbContext>(app);
+if (!app.Environment.IsEnvironment("Testing") && !app.Configuration.GetValue<bool>(MigracaoBancoDados.PularNaInicializacao))
 {
     await using var scope = app.Services.CreateAsyncScope();
     await scope.ServiceProvider.GetRequiredService<ExecucaoDbContext>().Database.MigrateAsync();
@@ -76,6 +83,8 @@ app.Use(async (context, next) =>
     }
 });
 app.UseAuthentication(); app.UseAuthorization();
+// Probe do kubelet e health check do ALB: anônima mesmo se uma política de fallback passar a exigir autenticação.
+app.MapHealthChecks("/health").AllowAnonymous();
 
 static string? Identidade(ClaimsPrincipal user) =>
     user.FindFirst("sub")?.Value is { Length: > 0 } sub ? sub : user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
@@ -169,5 +178,61 @@ execucoes.MapPost("/{id:guid}/reexecucao", async (Guid id, HttpContext context, 
     }, "reexecucao_invalida");
 }).RequireAuthorization("ReexecutarExecucao");
 
+static object ProjetarServico(ServicoCatalogo s) => new { s.Id, s.Nome, s.Descricao, s.PrecoUnitario, s.CriadoEm };
+static object ProjetarInsumo(Insumo i) => new { i.Id, i.Nome, i.Descricao, i.PrecoUnitario, i.QuantidadeDisponivel, i.QuantidadeReservada, i.CriadoEm };
+
+static bool FiltroNomeValido(string? nome) => nome is null || (!string.IsNullOrWhiteSpace(nome) && nome.Length <= LimitesCatalogo.NomeMaximo && !nome.Contains((char)0));
+
+// Catálogo e insumos: leitura para qualquer usuário autenticado; criação só do Administrador; entrada de estoque do Administrador ou Atendente.
+app.MapGet("/api/v1/servicos", async (string? nome, EstoqueService service, CancellationToken ct) =>
+    FiltroNomeValido(nome) ? Results.Ok(new { itens = (await service.ListarServicosAsync(nome?.Trim(), ct)).Select(ProjetarServico) }) : Results.UnprocessableEntity(new { codigo = "filtro_invalido" })).RequireAuthorization();
+
+app.MapPost("/api/v1/servicos", async (HttpContext context, EstoqueService service, CancellationToken ct) =>
+{
+    var corpo = await CorpoJson.LerObjetoAsync(context.Request, ct);
+    if (corpo is null || !CorpoJson.TentarLerCatalogo(corpo.Value, out var nome, out var descricao, out var preco)) return Results.UnprocessableEntity(new { codigo = "servico_invalido" });
+    return await Executar(async () =>
+    {
+        var servico = await service.CriarServicoAsync(nome!, descricao, preco, ct);
+        return Results.Created($"/api/v1/servicos/{servico.Id}", ProjetarServico(servico));
+    }, "servico_invalido");
+}).RequireAuthorization("AdministrarCatalogo");
+
+app.MapGet("/api/v1/insumos", async (string? nome, EstoqueService service, CancellationToken ct) =>
+    FiltroNomeValido(nome) ? Results.Ok(new { itens = (await service.ListarInsumosAsync(nome?.Trim(), ct)).Select(ProjetarInsumo) }) : Results.UnprocessableEntity(new { codigo = "filtro_invalido" })).RequireAuthorization();
+
+app.MapPost("/api/v1/insumos", async (HttpContext context, EstoqueService service, CancellationToken ct) =>
+{
+    var corpo = await CorpoJson.LerObjetoAsync(context.Request, ct);
+    if (corpo is null || !CorpoJson.TentarLerCatalogo(corpo.Value, out var nome, out var descricao, out var preco)
+        || !CorpoJson.TentarLerInteiroOpcional(corpo.Value, "quantidadeInicial", 0, out var quantidadeInicial)) return Results.UnprocessableEntity(new { codigo = "insumo_invalido" });
+    return await Executar(async () =>
+    {
+        var insumo = await service.CriarInsumoAsync(nome!, descricao, preco, quantidadeInicial, ct);
+        return Results.Created($"/api/v1/insumos/{insumo.Id}", ProjetarInsumo(insumo));
+    }, "insumo_invalido");
+}).RequireAuthorization("AdministrarCatalogo");
+
+app.MapPost("/api/v1/insumos/{id:guid}/entradas", async (Guid id, HttpContext context, EstoqueService service, CancellationToken ct) =>
+{
+    var responsavel = Identidade(context.User);
+    if (responsavel is null) return Results.Forbid();
+    var corpo = await CorpoJson.LerObjetoAsync(context.Request, ct);
+    if (corpo is null || !CorpoJson.TentarLerInteiro(corpo.Value, "quantidade", out var quantidade) || quantidade is < 1 or > LimitesCatalogo.QuantidadeMaxima)
+        return Results.UnprocessableEntity(new { codigo = "entrada_invalida" });
+    try { return Results.Ok(ProjetarInsumo(await service.RegistrarEntradaAsync(id, quantidade, responsavel, ct))); }
+    catch (KeyNotFoundException) { return Results.NotFound(new { codigo = "insumo_nao_encontrado" }); }
+    catch (ArgumentException) { return Results.UnprocessableEntity(new { codigo = "entrada_invalida" }); }
+}).RequireAuthorization("RegistrarEntradaInsumo");
+
+app.MapPost("/api/v1/admin/dlq/reprocessar", async (HttpContext context, ReprocessadorDlq reprocessador, CancellationToken ct) =>
+{
+    var corpo = await CorpoJson.LerObjetoAsync(context.Request, ct);
+    if (corpo is null || !corpo.Value.TryGetProperty("quantidade", out var q) || !q.TryGetInt32(out var quantidade) || quantidade < 1 || quantidade > ReprocessadorDlq.QuantidadeMaxima)
+        return Results.UnprocessableEntity(new { codigo = "quantidade_invalida" });
+    return Results.Accepted(value: await reprocessador.ReprocessarAsync(quantidade, Identidade(context.User) ?? "desconhecido", ct));
+}).RequireAuthorization("AdministrarDlq");
+
 app.Run();
+return 0;
 public partial class Program;

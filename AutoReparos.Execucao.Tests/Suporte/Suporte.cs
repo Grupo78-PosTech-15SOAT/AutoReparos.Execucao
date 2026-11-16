@@ -204,6 +204,15 @@ public sealed class FabricaApi(string conexao, SqsFalso sqs, AlertasFalsos alert
         await NoBancoAsync(async db => { db.Ordens.Add(ordem); await db.SaveChangesAsync(); return 0; });
         return ordem;
     }
+
+    public async Task<Insumo> SemearInsumoAsync(string nome, int disponivel, decimal preco = 10m)
+    {
+        var insumo = new Insumo(nome, null, preco, disponivel, DateTimeOffset.UtcNow);
+        await NoBancoAsync(async db => { db.Insumos.Add(insumo); await db.SaveChangesAsync(); return 0; });
+        return insumo;
+    }
+
+    public Task<Insumo> InsumoAsync(Guid id) => NoBancoAsync(db => db.Insumos.AsNoTracking().SingleAsync(i => i.Id == id));
 }
 
 public static class Mensagens
@@ -224,6 +233,31 @@ public static class Mensagens
         MessageId = "msg-" + eventId,
         ReceiptHandle = "recibo-" + eventId,
         Body = JsonSerializer.Serialize(new { eventId, tipo = TipoCancelar, correlacaoId, ordemServicoId, ocorreuEm = "2026-11-13T12:00:00Z", motivo })
+    };
+
+    public const string TipoReservarInsumos = "execucao.reservar-insumos.v1";
+    public const string TipoCancelarReserva = "execucao.cancelar-reserva.v1";
+
+    public static Amazon.SQS.Model.Message ReservarInsumos(Guid eventId, Guid ordemServicoId, IEnumerable<(Guid InsumoId, int Quantidade)> itens, Guid? correlacaoId = null) => new()
+    {
+        MessageId = "msg-" + eventId,
+        ReceiptHandle = "recibo-" + eventId,
+        Body = JsonSerializer.Serialize(new
+        {
+            eventId,
+            tipo = TipoReservarInsumos,
+            correlacaoId,
+            ordemServicoId,
+            ocorreuEm = "2026-11-15T12:00:00Z",
+            itens = itens.Select(i => new { insumoId = i.InsumoId, quantidade = i.Quantidade }).ToArray()
+        })
+    };
+
+    public static Amazon.SQS.Model.Message CancelarReserva(Guid eventId, Guid ordemServicoId, Guid? correlacaoId = null) => new()
+    {
+        MessageId = "msg-" + eventId,
+        ReceiptHandle = "recibo-" + eventId,
+        Body = JsonSerializer.Serialize(new { eventId, tipo = TipoCancelarReserva, correlacaoId, ordemServicoId, ocorreuEm = "2026-11-15T12:00:00Z" })
     };
 
     public static StringContent Json(string corpo) => new(corpo, System.Text.Encoding.UTF8, "application/json");
