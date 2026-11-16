@@ -1,0 +1,55 @@
+# Valores do chart da Execução. O job deploy informa image.*, aws.conta, serviceAccount.roleArn e autenticacao.emissor.
+
+image:
+  repository: ""  # URL do ECR autoreparos-execucao (output ecr_url do Terraform)
+  tag: ""         # SHA do commit
+  pullPolicy: IfNotPresent
+
+aws:
+  conta: ""
+  regiao: us-east-1
+
+serviceAccount:
+  roleArn: ""  # role IRSA autoreparos-execucao-irsa (output irsa_role_arn do Terraform)
+
+database:
+  variavel: ConnectionStrings__Execucao  # chave do Secret execucao-database
+
+autenticacao:
+  emissor: ""    # URL pública do API Gateway (/autoreparos/production/apigateway/endpoint), emissor dos tokens do Cadastros
+  audiencia: ""  # audiência exigida no JWT; vazia não define Authentication__Audience
+
+telemetria:
+  nomeServico: autoreparos-execucao
+  otlpEndpoint: http://autoreparos-otel-collector.autoreparos.svc.cluster.local:4317
+
+# Nomes das filas (a fila pertence ao consumidor e é criada pelo Terraform dele).
+filas:
+  liberadas: autoreparos-execucao-liberadas        # comandos da Saga enviados pelo OS
+  liberadasDlq: autoreparos-execucao-liberadas-dlq
+  saga: autoreparos-os-saga                        # entrada da Saga do OS
+  cobranca: autoreparos-cobranca-execucoes         # execucao.concluida.v1 para a Cobrança
+  saidaDlq: autoreparos-execucao-saida-dlq         # eventos do outbox esgotados
+
+ingress:
+  ordem: 30
+  prefixos:
+    - /api/v1/execucoes
+    - /api/v1/fila-execucao
+    - /api/v1/servicos
+    - /api/v1/insumos
+
+hpa:
+  cpu: 80
+
+migracao:
+  prazoSegundos: 600
+
+# Dois nós t3.medium dividem os quatro serviços, o Web e a observabilidade.
+resources:
+  requests:
+    cpu: 50m
+    memory: 160Mi
+  limits:
+    cpu: 500m
+    memory: 384Mi
