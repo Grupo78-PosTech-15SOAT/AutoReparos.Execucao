@@ -1,0 +1,38 @@
+# Migra a database do serviço antes de cada instalação ou atualização (ADR-004): a mesma imagem com
+# Database__RunMigrations=true aplica as migrations e sai. Se falhar, o Helm não troca a versão (--atomic).
+# Roda com o ServiceAccount padrão do namespace: no pre-install os objetos do chart ainda não existem.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "servico.nome" . }}-migracao
+  labels:
+    {{- include "servico.rotulos" . | nindent 4 }}
+    app.kubernetes.io/component: migracao
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ .Values.migracao.prazoSegundos }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "servico.nome" . }}-migracao
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: migracao
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      {{- include "servico.seguranca" . | nindent 6 }}
+      containers:
+        - name: migracao
+          image: {{ include "servico.imagem" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "servico.segurancaContainer" . | nindent 10 }}
+          env:
+            - name: Database__RunMigrations
+              value: "true"
+            {{- include "servico.conexao" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

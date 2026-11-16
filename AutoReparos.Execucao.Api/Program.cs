@@ -35,6 +35,7 @@ builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 
 builder.Services.AddOpenApi();
 builder.Services.AddDbContext<ExecucaoDbContext>(o => o.UseNpgsql(builder.Configuration.GetConnectionString("Execucao")));
 builder.Services.AddScoped<IExecucaoStore>(sp => sp.GetRequiredService<ExecucaoDbContext>());
+builder.Services.AddHealthChecks().AddDbContextCheck<ExecucaoDbContext>();
 builder.Services.AddScoped<ExecucaoService>();
 builder.Services.AddScoped<EstoqueService>();
 builder.Services.AddScoped<ReprocessadorDlq>();
@@ -63,7 +64,8 @@ builder.Services.AddAuthorization(options =>
 });
 
 var app = builder.Build();
-if (!app.Environment.IsEnvironment("Testing"))
+if (app.Configuration.GetValue<bool>(MigracaoBancoDados.MigrarESair)) return await MigracaoBancoDados.MigrarESairAsync<ExecucaoDbContext>(app);
+if (!app.Environment.IsEnvironment("Testing") && !app.Configuration.GetValue<bool>(MigracaoBancoDados.PularNaInicializacao))
 {
     await using var scope = app.Services.CreateAsyncScope();
     await scope.ServiceProvider.GetRequiredService<ExecucaoDbContext>().Database.MigrateAsync();
@@ -81,6 +83,8 @@ app.Use(async (context, next) =>
     }
 });
 app.UseAuthentication(); app.UseAuthorization();
+// Probe do kubelet e health check do ALB: anônima mesmo se uma política de fallback passar a exigir autenticação.
+app.MapHealthChecks("/health").AllowAnonymous();
 
 static string? Identidade(ClaimsPrincipal user) =>
     user.FindFirst("sub")?.Value is { Length: > 0 } sub ? sub : user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
@@ -230,4 +234,5 @@ app.MapPost("/api/v1/admin/dlq/reprocessar", async (HttpContext context, Reproce
 }).RequireAuthorization("AdministrarDlq");
 
 app.Run();
+return 0;
 public partial class Program;

@@ -1,0 +1,35 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ConsumirFilasProprias",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:ReceiveMessage",
+        "sqs:DeleteMessage",
+        "sqs:ChangeMessageVisibility",
+        "sqs:GetQueueAttributes",
+        "sqs:GetQueueUrl",
+        "sqs:SendMessage"
+      ],
+      "Resource": [
+        "arn:aws:sqs:${regiao}:${conta}:autoreparos-execucao-liberadas",
+        "arn:aws:sqs:${regiao}:${conta}:autoreparos-execucao-liberadas-dlq",
+        "arn:aws:sqs:${regiao}:${conta}:autoreparos-execucao-saida-dlq"
+      ]
+    },
+    {
+      "Sid": "PublicarEventos",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:SendMessage",
+        "sqs:GetQueueAttributes",
+        "sqs:GetQueueUrl"
+      ],
+      "Resource": [
+        "arn:aws:sqs:${regiao}:${conta}:autoreparos-os-saga",
+        "arn:aws:sqs:${regiao}:${conta}:autoreparos-cobranca-execucoes"
+      ]
+    }
+  ]
+}
