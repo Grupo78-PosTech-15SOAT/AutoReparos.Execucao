@@ -178,7 +178,7 @@ public sealed class EstoqueService(IExecucaoStore store, TimeProvider relogio)
             EventId = eventId,
             Destino = DestinosEvento.OsService,
             Tipo = tipo,
-            Conteudo = JsonSerializer.Serialize(corpo),
+            Conteudo = ContextoTrace.Serializar(corpo),
             CriadoEm = relogio.GetUtcNow()
         };
     }
