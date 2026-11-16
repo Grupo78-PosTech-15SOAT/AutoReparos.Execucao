@@ -4,3 +4,8 @@
 *.user
 .env
 TestResults/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
