@@ -14,6 +14,10 @@ Serviço autônomo da Fase 4 que conduz as ordens de serviço liberadas: fila de
 
 A concorrência é otimista por `xmin` (coluna de sistema do PostgreSQL). Toda mudança no agregado incrementa `Revisao`, então até o registro de uma etapa (inserção filha) altera a linha pai. Dois pedidos simultâneos sobre a mesma execução resultam em um sucesso e um `409` com `codigo: conflito_concorrencia`.
 
+### Papel na Saga
+
+A Saga é orquestrada pelo OS Service; o Execução é participante e só fala por mensagens SQS. Consome `ordem-servico.liberada.v1` e o comando de compensação `execucao.cancelar.v1` (fila `Sqs__LiberadasQueueUrl`) e publica `execucao.concluida.v1` (OS Service e Cobrança), `execucao.falhou.v1`, `execucao.cancelada.v1`, `execucao.cancelamento-recusado.v1` e `execucao.liberacao-recusada.v1` pelo outbox. O banco é PostgreSQL próprio (`ConnectionStrings__Execucao`), sem acesso às tabelas dos outros serviços. Além da execução, o serviço é dono do catálogo de serviços e de insumos (estoque), lidos pelo Cobrança por HTTP.
+
 ## Configuração
 
 Informe por variáveis de ambiente ou gerenciador de segredos. Nunca versione tokens ou strings de conexão.
@@ -207,3 +211,9 @@ Para o job `quality` passar, o repositório precisa destes itens em **Settings �
 O projeto `Grupo78-PosTech-15SOAT_AutoReparos.Execucao` precisa existir no SonarCloud (ou o token precisa poder criá-lo). Nunca versione o token. Depois de criar o secret, reexecute o job `quality` da última execução; não é preciso novo commit.
 
 Quando a proteção da `main` for aplicada (AD-026 do repositório pai), os jobs `build`, `test` e `quality` serão os status checks obrigatórios.
+
+## Cobertura
+
+O limite mínimo é de **80%** de cobertura de linhas. No CI (`.github/workflows/ci-cd.yml`) o job `test` roda os testes de `AutoReparos.Execucao.Tests` e `AutoReparos.Execucao.IntegrationTests` com `XPlat Code Coverage` (formatos Cobertura e OpenCover) e o script `.github/scripts/verificar_cobertura.py` une os relatórios `coverage.cobertura.xml` e falha se o total ficar abaixo de `MINIMO_COBERTURA` (80). O job `quality` envia os relatórios OpenCover ao SonarCloud e espera o quality gate (migrações e `bin`/`obj` ficam fora da análise).
+
+Relatório do SonarCloud: https://sonarcloud.io/project/overview?id=Grupo78-PosTech-15SOAT_AutoReparos.Execucao
