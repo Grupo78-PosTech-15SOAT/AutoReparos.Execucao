@@ -17,7 +17,7 @@ database:
 
 autenticacao:
   emissor: ""    # URL pública do API Gateway (/autoreparos/production/apigateway/endpoint), emissor dos tokens do Cadastros
-  audiencia: ""  # audiência exigida no JWT; vazia não define Authentication__Audience
+  audiencia: "autoreparos"  # aud emitido pelo Cadastros (D-57); vazia não define Authentication__Audience
 
 telemetria:
   nomeServico: autoreparos-execucao
