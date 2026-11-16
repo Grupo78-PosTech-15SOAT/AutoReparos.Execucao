@@ -1,4 +1,3 @@
-using System.Text.Json;
 using AutoReparos.Execucao.Domain;
 
 namespace AutoReparos.Execucao.Application;
@@ -175,7 +174,7 @@ public sealed class ExecucaoService(IExecucaoStore store, TimeProvider relogio)
         await store.BaixarReservadoAsync(reservas, ct);
         // Mesmo eventId para os dois consumidores; cada destino tem sua própria linha no outbox.
         var eventId = Guid.NewGuid();
-        var conteudo = JsonSerializer.Serialize(new
+        var conteudo = ContextoTrace.Serializar(new
         {
             eventId,
             tipo = TiposEvento.ExecucaoConcluida,
@@ -198,7 +197,7 @@ public sealed class ExecucaoService(IExecucaoStore store, TimeProvider relogio)
         var ordem = await store.ObterAsync(id, ct) ?? throw new KeyNotFoundException();
         ordem.Falhar(motivo, relogio.GetUtcNow());
         var eventId = Guid.NewGuid();
-        var conteudo = JsonSerializer.Serialize(new
+        var conteudo = ContextoTrace.Serializar(new
         {
             eventId,
             tipo = TiposEvento.ExecucaoFalhou,
@@ -238,7 +237,7 @@ public sealed class ExecucaoService(IExecucaoStore store, TimeProvider relogio)
         };
         if (execucaoId is not null) corpo["execucaoId"] = execucaoId;
         if (motivo is not null) corpo["motivo"] = motivo;
-        return NovaMensagem(eventId, DestinosEvento.OsService, tipo, JsonSerializer.Serialize(corpo));
+        return NovaMensagem(eventId, DestinosEvento.OsService, tipo, ContextoTrace.Serializar(corpo));
     }
 
     private MensagemSaida NovaMensagem(Guid eventId, string destino, string tipo, string conteudo) =>

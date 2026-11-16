@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Text.Json;
 using Amazon.SQS;
 using Amazon.SQS.Model;
 using AutoReparos.Execucao.Application;
@@ -66,7 +68,21 @@ public enum ResultadoPublicacao { Enviado, EncaminhadoParaDlq }
 
 public sealed class PublicadorSqsEventos(IAmazonSQS sqs, IConfiguration config, ILogger<PublicadorSqsEventos> logger, IAlertSink alerts, PoliticaRetentativa politica)
 {
+    private const string SistemaMensageria = "aws_sqs";
+
+    // Span Producer filho do contexto gravado no envelope ao criar a mensagem; o corpo publicado é o envelope sem alteração.
     public async Task<ResultadoPublicacao> PublicarAsync(MensagemSaida mensagem, CancellationToken ct)
+    {
+        LeitorJson.TentarLerObjeto(mensagem.Conteudo, out var envelope);
+        using var atividade = ContextoTrace.Iniciar($"publicar {mensagem.Tipo}", ActivityKind.Producer, ContextoTrace.Extrair(envelope));
+        ContextoTrace.Marcar(atividade, SistemaMensageria, mensagem.EventId,
+            envelope.ValueKind == JsonValueKind.Object && LeitorJson.TentarLerGuid(envelope, "ordemServicoId", out var ordemServicoId) ? ordemServicoId : null);
+        var resultado = await EnviarAsync(mensagem, ct);
+        if (resultado == ResultadoPublicacao.EncaminhadoParaDlq) atividade?.SetStatus(ActivityStatusCode.Error, "encaminhado à DLQ");
+        return resultado;
+    }
+
+    private async Task<ResultadoPublicacao> EnviarAsync(MensagemSaida mensagem, CancellationToken ct)
     {
         var chave = mensagem.Destino switch
         {
@@ -142,10 +158,13 @@ public sealed class ConsumidorOsLiberada(IServiceScopeFactory scopes, IAmazonSQS
         return resposta.Messages?.Count ?? 0;
     }
 
+    // Cada mensagem é processada num span Consumer filho do contexto do envelope; sem `traceparent` válido, o span é raiz e o processamento segue igual.
     public async Task ProcessarAsync(Message mensagem, CancellationToken ct)
     {
         var fila = config["Sqs:LiberadasQueueUrl"] ?? throw new InvalidOperationException("Sqs:LiberadasQueueUrl não configurada.");
-        var (eventId, aplicar) = Interpretar(mensagem.Body);
+        var (tipo, eventId, ordemServicoId, aplicar) = Interpretar(mensagem.Body);
+        using var atividade = ContextoTrace.Iniciar($"processar {tipo}", ActivityKind.Consumer, ContextoTrace.Extrair(mensagem.Body));
+        ContextoTrace.Marcar(atividade, "aws_sqs", aplicar is null ? null : eventId, ordemServicoId);
         if (aplicar is null)
         {
             await EncaminharParaDlqAsync(mensagem, "execucao.evento_invalido", mensagem.MessageId ?? "sem-id", ct);
@@ -163,24 +182,27 @@ public sealed class ConsumidorOsLiberada(IServiceScopeFactory scopes, IAmazonSQS
         catch (Exception ex) when (ex is not OperationCanceledException && FalhaTransitoria.EhTransitoria(ex))
         {
             logger.LogError(ex, "Evento {EventId} encaminhado à DLQ após esgotar as tentativas no banco.", eventId);
+            atividade?.SetStatus(ActivityStatusCode.Error, "encaminhado à DLQ");
             await EncaminharParaDlqAsync(mensagem, null, eventId.ToString(), ct);
         }
         await sqs.DeleteMessageAsync(new DeleteMessageRequest { QueueUrl = fila, ReceiptHandle = mensagem.ReceiptHandle }, ct);
     }
 
-    // Despacha pelo `tipo`; mensagem malformada ou de tipo desconhecido não tem operação (vai à DLQ de entrada).
-    private static (Guid EventId, Func<IServiceProvider, CancellationToken, Task>? Aplicar) Interpretar(string? corpo)
+    private const string TipoDesconhecido = "desconhecido";
+
+    // Despacha pelo `tipo`; mensagem malformada ou de tipo desconhecido não tem operação (vai à DLQ de entrada) e o span recebe o nome `processar desconhecido`.
+    private static (string Tipo, Guid EventId, Guid? OrdemServicoId, Func<IServiceProvider, CancellationToken, Task>? Aplicar) Interpretar(string? corpo)
     {
-        if (!LeitorJson.TentarLerObjeto(corpo, out var json) || !LeitorJson.TentarLerTexto(json, "tipo", 100, out var tipo)) return (Guid.Empty, null);
+        if (!LeitorJson.TentarLerObjeto(corpo, out var json) || !LeitorJson.TentarLerTexto(json, "tipo", 100, out var tipo)) return (TipoDesconhecido, Guid.Empty, null, null);
         if (tipo == TiposEvento.OsLiberada && EventoOsLiberada.TentarLer(corpo, out var liberada))
-            return (liberada!.EventId, (scope, token) => scope.GetRequiredService<ExecucaoService>().ReceberOsLiberadaAsync(liberada, token));
+            return (tipo, liberada!.EventId, liberada.OrdemServicoId, (scope, token) => scope.GetRequiredService<ExecucaoService>().ReceberOsLiberadaAsync(liberada, token));
         if (tipo == TiposEvento.ExecucaoCancelar && EventoCancelarExecucao.TentarLer(corpo, out var cancelar))
-            return (cancelar!.EventId, (scope, token) => scope.GetRequiredService<ExecucaoService>().CancelarPorOsAsync(cancelar, token));
+            return (tipo, cancelar!.EventId, cancelar.OrdemServicoId, (scope, token) => scope.GetRequiredService<ExecucaoService>().CancelarPorOsAsync(cancelar, token));
         if (tipo == TiposEvento.ReservarInsumos && EventoReservarInsumos.TentarLer(corpo, out var reservar))
-            return (reservar!.EventId, (scope, token) => scope.GetRequiredService<EstoqueService>().ReservarAsync(reservar, token));
+            return (tipo, reservar!.EventId, reservar.OrdemServicoId, (scope, token) => scope.GetRequiredService<EstoqueService>().ReservarAsync(reservar, token));
         if (tipo == TiposEvento.CancelarReserva && EventoCancelarReserva.TentarLer(corpo, out var cancelarReserva))
-            return (cancelarReserva!.EventId, (scope, token) => scope.GetRequiredService<EstoqueService>().CancelarReservaAsync(cancelarReserva, token));
-        return (Guid.Empty, null);
+            return (tipo, cancelarReserva!.EventId, cancelarReserva.OrdemServicoId, (scope, token) => scope.GetRequiredService<EstoqueService>().CancelarReservaAsync(cancelarReserva, token));
+        return (TipoDesconhecido, Guid.Empty, null, null);
     }
 
     private async Task EncaminharParaDlqAsync(Message mensagem, string? alerta, string referencia, CancellationToken ct)

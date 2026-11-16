@@ -16,6 +16,7 @@ var otlpEndpoint = builder.Configuration["Telemetry:OtlpEndpoint"] ?? "http://lo
 builder.Services.AddOpenTelemetry()
     .ConfigureResource(resource => TelemetriaExecucao.Configurar(resource, serviceName, builder.Environment.EnvironmentName))
     .WithTracing(tracing => tracing
+        .AddSource("AutoReparos.Execucao.Mensageria")
         .AddAspNetCoreInstrumentation()
         .AddHttpClientInstrumentation()
         .AddOtlpExporter(options => options.Endpoint = new Uri(otlpEndpoint)))
