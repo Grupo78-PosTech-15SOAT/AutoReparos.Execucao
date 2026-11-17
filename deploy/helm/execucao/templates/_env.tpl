@@ -20,4 +20,6 @@
   value: {{ include "servico.fila" (list . .Values.filas.cobranca) | quote }}
 - name: Sqs__DeadLetterQueueUrl
   value: {{ include "servico.fila" (list . .Values.filas.saidaDlq) | quote }}
+- name: Sns__EventosTopicArn
+  value: {{ include "servico.topico" (list . .Values.topicos.eventos) | quote }}
 {{- end }}

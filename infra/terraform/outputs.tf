@@ -27,3 +27,8 @@ output "fila_saida_dlq_url" {
   description = "URL da DLQ dos eventos publicados pela Execução."
   value       = aws_sqs_queue.saida_dlq.url
 }
+
+output "topico_eventos_arn" {
+  description = "ARN do tópico SNS dos eventos da Execução (Sns__EventosTopicArn)."
+  value       = aws_sns_topic.eventos.arn
+}

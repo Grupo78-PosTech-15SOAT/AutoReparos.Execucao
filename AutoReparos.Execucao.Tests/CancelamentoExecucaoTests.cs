@@ -439,7 +439,7 @@ public sealed class CancelamentoExecucaoTests(PostgresFixture postgres)
         Assert.Equal(HttpStatusCode.OK, (await http.PostAsync($"/api/v1/execucoes/{execucaoId}/conclusao", null)).StatusCode);
 
         var saida = await SaidaAsync(ambiente);
-        Assert.Equal([DestinosEvento.Billing, DestinosEvento.OsService], saida.Select(m => m.Destino).Order().ToArray());
+        Assert.Equal([DestinosEvento.Topico], saida.Select(m => m.Destino).Order().ToArray());
         Assert.All(saida, m =>
         {
             var evento = JsonDocument.Parse(m.Conteudo).RootElement;
