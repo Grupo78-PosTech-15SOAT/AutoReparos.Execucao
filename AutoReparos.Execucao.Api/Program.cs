@@ -42,7 +42,9 @@ builder.Services.AddScoped<EstoqueService>();
 builder.Services.AddScoped<ReprocessadorDlq>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<IAmazonSQS, AmazonSQSClient>();
-builder.Services.AddSingleton<Amazon.SimpleNotificationService.IAmazonSimpleNotificationService, Amazon.SimpleNotificationService.AmazonSimpleNotificationServiceClient>();
+// O cliente SNS só existe com o tópico configurado (produção, D-67); sem ele o publicador usa as filas e nada exige região AWS.
+if (!string.IsNullOrWhiteSpace(builder.Configuration["Sns:EventosTopicArn"]))
+    builder.Services.AddSingleton<Amazon.SimpleNotificationService.IAmazonSimpleNotificationService, Amazon.SimpleNotificationService.AmazonSimpleNotificationServiceClient>();
 builder.Services.AddSingleton<IAlertSink, LoggingAlertSink>();
 builder.Services.AddSingleton(PoliticaRetentativa.Padrao);
 builder.Services.AddSingleton<PublicadorSqsEventos>();
