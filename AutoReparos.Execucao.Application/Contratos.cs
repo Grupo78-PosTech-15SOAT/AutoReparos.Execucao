@@ -22,6 +22,8 @@ public static class DestinosEvento
 {
     public const string OsService = "os-service";
     public const string Billing = "billing";
+    /// <summary>Evento publicado uma vez no tópico <c>autoreparos-execucao-eventos</c> (D-67); os consumidores assinam por <c>tipo</c>.</summary>
+    public const string Topico = "topico";
 }
 
 public enum ResultadoRecebimento { Enfileirada, Duplicada, Recusada }
@@ -172,7 +174,7 @@ public sealed class ExecucaoService(IExecucaoStore store, TimeProvider relogio)
         var reservas = (await store.ListarReservasAsync(ordem.OrdemServicoId, ct)).Where(r => r.Status == StatusReserva.Reservada).ToList();
         foreach (var reserva in reservas) reserva.Confirmar(agora);
         await store.BaixarReservadoAsync(reservas, ct);
-        // Mesmo eventId para os dois consumidores; cada destino tem sua própria linha no outbox.
+        // Uma linha por evento (D-67): o tópico entrega a cada consumidor que assina execucao.concluida.v1.
         var eventId = Guid.NewGuid();
         var conteudo = ContextoTrace.Serializar(new
         {
@@ -186,8 +188,7 @@ public sealed class ExecucaoService(IExecucaoStore store, TimeProvider relogio)
             veiculoId = ordem.VeiculoId,
             concluidaEm = ordem.ConcluidaEm
         });
-        foreach (var destino in new[] { DestinosEvento.OsService, DestinosEvento.Billing })
-            store.Adicionar(NovaMensagem(eventId, destino, TiposEvento.ExecucaoConcluida, conteudo));
+        store.Adicionar(NovaMensagem(eventId, DestinosEvento.Topico, TiposEvento.ExecucaoConcluida, conteudo));
         await store.SalvarAsync(ct);
         return ordem;
     }

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using Amazon.SimpleNotificationService;
 using Amazon.SQS;
 using Amazon.SQS.Model;
 using AutoReparos.Execucao.Application;
@@ -66,9 +67,16 @@ public static class FalhaTransitoria
 
 public enum ResultadoPublicacao { Enviado, EncaminhadoParaDlq }
 
-public sealed class PublicadorSqsEventos(IAmazonSQS sqs, IConfiguration config, ILogger<PublicadorSqsEventos> logger, IAlertSink alerts, PoliticaRetentativa politica)
+// Com `Sns:EventosTopicArn` configurado (produção, D-67), toda linha do outbox, inclusive as antigas com `Destino`,
+// é publicada uma vez no tópico com o atributo `tipo`; o Inbox dos consumidores deduplica pelo `eventId`.
+// Sem o tópico (testes e compose local), cada destino segue para a própria fila e `topico` vai à fila do OS.
+public sealed class PublicadorSqsEventos(IAmazonSQS sqs, IConfiguration config, ILogger<PublicadorSqsEventos> logger, IAlertSink alerts, PoliticaRetentativa politica, IAmazonSimpleNotificationService? sns = null)
 {
-    private const string SistemaMensageria = "aws_sqs";
+    private const string AtributoTipo = "tipo";
+
+    private string? Topico => config["Sns:EventosTopicArn"] is { Length: > 0 } arn && sns is not null ? arn : null;
+
+    private string SistemaMensageria => Topico is null ? "aws_sqs" : "aws_sns";
 
     // Span Producer filho do contexto gravado no envelope ao criar a mensagem; o corpo publicado é o envelope sem alteração.
     public async Task<ResultadoPublicacao> PublicarAsync(MensagemSaida mensagem, CancellationToken ct)
@@ -84,18 +92,14 @@ public sealed class PublicadorSqsEventos(IAmazonSQS sqs, IConfiguration config, 
 
     private async Task<ResultadoPublicacao> EnviarAsync(MensagemSaida mensagem, CancellationToken ct)
     {
-        var chave = mensagem.Destino switch
-        {
-            DestinosEvento.OsService => "Sqs:OsServiceQueueUrl",
-            DestinosEvento.Billing => "Sqs:BillingQueueUrl",
-            _ => throw new InvalidOperationException($"Destino de evento desconhecido: {mensagem.Destino}.")
-        };
-        var destino = config[chave] ?? throw new InvalidOperationException($"{chave} não configurada.");
+        var topico = Topico;
+        Func<CancellationToken, Task> publicar = topico is not null
+            ? token => sns!.PublishAsync(NovaPublicacao(topico, mensagem), token)
+            : FilaDoDestino(mensagem);
         var dlq = config["Sqs:DeadLetterQueueUrl"] ?? throw new InvalidOperationException("Sqs:DeadLetterQueueUrl não configurada.");
         try
         {
-            await DependencyRetry.ExecuteAsync(token => sqs.SendMessageAsync(new SendMessageRequest { QueueUrl = destino, MessageBody = mensagem.Conteudo }, token),
-                _ => Task.CompletedTask, ct, politica);
+            await DependencyRetry.ExecuteAsync(publicar, _ => Task.CompletedTask, ct, politica);
             return ResultadoPublicacao.Enviado;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -114,6 +118,28 @@ public sealed class PublicadorSqsEventos(IAmazonSQS sqs, IConfiguration config, 
             }
         }
     }
+
+    private Func<CancellationToken, Task> FilaDoDestino(MensagemSaida mensagem)
+    {
+        var chave = mensagem.Destino switch
+        {
+            DestinosEvento.OsService or DestinosEvento.Topico => "Sqs:OsServiceQueueUrl",
+            DestinosEvento.Billing => "Sqs:BillingQueueUrl",
+            _ => throw new InvalidOperationException($"Destino de evento desconhecido: {mensagem.Destino}.")
+        };
+        var fila = config[chave] ?? throw new InvalidOperationException($"{chave} não configurada.");
+        return token => sqs.SendMessageAsync(new SendMessageRequest { QueueUrl = fila, MessageBody = mensagem.Conteudo }, token);
+    }
+
+    private static Amazon.SimpleNotificationService.Model.PublishRequest NovaPublicacao(string topico, MensagemSaida mensagem) => new()
+    {
+        TopicArn = topico,
+        Message = mensagem.Conteudo,
+        MessageAttributes = new Dictionary<string, Amazon.SimpleNotificationService.Model.MessageAttributeValue>
+        {
+            [AtributoTipo] = new() { DataType = "String", StringValue = mensagem.Tipo }
+        }
+    };
 }
 
 // Lê o outbox em transação com FOR UPDATE SKIP LOCKED: várias instâncias não publicam a mesma linha.

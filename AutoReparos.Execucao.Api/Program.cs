@@ -42,6 +42,7 @@ builder.Services.AddScoped<EstoqueService>();
 builder.Services.AddScoped<ReprocessadorDlq>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<IAmazonSQS, AmazonSQSClient>();
+builder.Services.AddSingleton<Amazon.SimpleNotificationService.IAmazonSimpleNotificationService, Amazon.SimpleNotificationService.AmazonSimpleNotificationServiceClient>();
 builder.Services.AddSingleton<IAlertSink, LoggingAlertSink>();
 builder.Services.AddSingleton(PoliticaRetentativa.Padrao);
 builder.Services.AddSingleton<PublicadorSqsEventos>();

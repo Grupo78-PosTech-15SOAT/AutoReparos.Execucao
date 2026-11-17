@@ -76,7 +76,7 @@ public sealed class TraceMensageriaTests : IDisposable
         await ConcluirAsync(ambiente, ordem.Id);
 
         var envelopes = await EnvelopesAsync(ambiente);
-        Assert.Equal(2, envelopes.Count);
+        Assert.Single(envelopes);
         Assert.Equal(ActivityIdFormat.W3C, origem.IdFormat);
         Assert.All(envelopes, envelope =>
         {
@@ -96,7 +96,7 @@ public sealed class TraceMensageriaTests : IDisposable
         await ConcluirAsync(ambiente, ordem.Id);
 
         var envelopes = await EnvelopesAsync(ambiente);
-        Assert.Equal(2, envelopes.Count);
+        Assert.Single(envelopes);
         Assert.All(envelopes, envelope =>
         {
             Assert.False(envelope.TryGetProperty("traceparent", out _));

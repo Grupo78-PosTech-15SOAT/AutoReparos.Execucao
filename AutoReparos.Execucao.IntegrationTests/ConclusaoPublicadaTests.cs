@@ -36,7 +36,8 @@ public sealed class ConclusaoPublicadaTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task CompletionPublishedToConsumers_OsServiceAndBillingQueuesReceiveTheEvent()
+    // Sem Sns:EventosTopicArn (testes e compose local), a linha única do evento vai à fila do OS; em produção vai ao tópico (D-67).
+    public async Task CompletionPublishedToConsumers_WithoutTopicTheOsServiceQueueReceivesTheEvent()
     {
         using var ambiente = await Ambiente.CriarAsync(postgres);
         var concluidaEm = new DateTimeOffset(2026, 11, 13, 18, 45, 0, TimeSpan.Zero);
@@ -48,15 +49,10 @@ public sealed class ConclusaoPublicadaTests(PostgresFixture postgres)
         var despachadas = 0;
         while (await ambiente.Despachante.DespacharProximaAsync(CancellationToken.None)) despachadas++;
 
-        Assert.Equal(2, despachadas);
+        Assert.Equal(1, despachadas);
         var enviadas = ambiente.Sqs.Enviadas;
-        Assert.Equal([FabricaApi.FilaBilling, FabricaApi.FilaOs], enviadas.Select(e => e.Fila).Order().ToArray());
-        var paraOs = enviadas.Single(e => e.Fila == FabricaApi.FilaOs).Corpo;
-        var paraBilling = enviadas.Single(e => e.Fila == FabricaApi.FilaBilling).Corpo;
-        AssertEventoConcluido(paraOs, execucaoId, origem, concluidaEm);
-        AssertEventoConcluido(paraBilling, execucaoId, origem, concluidaEm);
-        // Cada consumidor recebe o mesmo evento (mesmo eventId) para deduplicar do seu lado.
-        Assert.Equal(JsonDocument.Parse(paraOs).RootElement.GetProperty("eventId").GetGuid(), JsonDocument.Parse(paraBilling).RootElement.GetProperty("eventId").GetGuid());
+        Assert.Equal([FabricaApi.FilaOs], enviadas.Select(e => e.Fila).ToArray());
+        AssertEventoConcluido(enviadas[0].Corpo, execucaoId, origem, concluidaEm);
 
         var saida = await ambiente.Fabrica.NoBancoAsync(db => db.MensagensSaida.AsNoTracking().ToListAsync());
         Assert.All(saida, m => { Assert.NotNull(m.EnviadoEm); Assert.False(m.EncaminhadoParaDlq); Assert.Equal(0, m.Tentativas); });
@@ -65,11 +61,11 @@ public sealed class ConclusaoPublicadaTests(PostgresFixture postgres)
 
         // Um novo ciclo do publicador não reenvia nada.
         Assert.False(await ambiente.Despachante.DespacharProximaAsync(CancellationToken.None));
-        Assert.Equal(2, ambiente.Sqs.Enviadas.Count);
+        Assert.Single(ambiente.Sqs.Enviadas);
     }
 
     [Fact]
-    public async Task CompletionPublishedToConsumers_BackgroundServicesCarryReleasedOrderToBothQueues()
+    public async Task CompletionPublishedToConsumers_BackgroundServicesCarryReleasedOrderToTheOsQueue()
     {
         using var ambiente = await Ambiente.CriarAsync(postgres, segundoPlano: true);
         Guid eventId = Guid.NewGuid(), os = Guid.NewGuid(), cliente = Guid.NewGuid(), veiculo = Guid.NewGuid();
@@ -93,8 +89,8 @@ public sealed class ConclusaoPublicadaTests(PostgresFixture postgres)
         Assert.Equal(HttpStatusCode.OK, (await mecanico.PostAsync($"/api/v1/execucoes/{execucaoId}/conclusao", null)).StatusCode);
 
         // O publicador em segundo plano esvazia o outbox.
-        await EsperarAsync(() => Task.FromResult(ambiente.Sqs.Enviadas.Count == 2));
-        Assert.Equal([FabricaApi.FilaBilling, FabricaApi.FilaOs], ambiente.Sqs.Enviadas.Select(e => e.Fila).Order().ToArray());
+        await EsperarAsync(() => Task.FromResult(ambiente.Sqs.Enviadas.Count == 1));
+        Assert.Equal([FabricaApi.FilaOs], ambiente.Sqs.Enviadas.Select(e => e.Fila).ToArray());
         foreach (var (_, corpo) in ambiente.Sqs.Enviadas)
         {
             var evento = JsonDocument.Parse(corpo).RootElement;
