@@ -31,6 +31,9 @@ filas:
   cobranca: autoreparos-cobranca-execucoes         # execucao.concluida.v1 para a Cobrança
   saidaDlq: autoreparos-execucao-saida-dlq         # eventos do outbox esgotados
 
+topicos:
+  eventos: autoreparos-execucao-eventos            # todos os eventos da Execução (D-67); os consumidores assinam
+
 ingress:
   ordem: 30
   prefixos:

@@ -25,6 +25,10 @@ public sealed class CancelamentoExecucaoTests(PostgresFixture postgres)
         $"{{\"eventId\":\"{m.EventId}\",\"tipo\":\"{tipo}\",\"correlacaoId\":{(correlacao is null ? "null" : $"\"{correlacao}\"")},\"ordemServicoId\":\"{os}\",\"ocorreuEm\":\"{AgoraJson}\""
         + (execucao is null ? "" : $",\"execucaoId\":\"{execucao}\"") + (motivo is null ? "" : $",\"motivo\":{JsonSerializer.Serialize(motivo)}") + "}";
 
+    // Os campos opcionais de trace (D-65) dependem de haver ouvinte de Activity no processo; são provados em TraceMensageriaTests.
+    private static string SemTrace(string conteudo) =>
+        System.Text.RegularExpressions.Regex.Replace(conteudo, "(,)?\"traceparent\":\"[^\"]*\"(,\"tracestate\":\"[^\"]*\")?(?=}$)", "");
+
     private static void AssertEntregaSemAlerta(Ambiente ambiente, Amazon.SQS.Model.Message mensagem)
     {
         Assert.Equal([(FabricaApi.FilaLiberadas, mensagem.ReceiptHandle)], ambiente.Sqs.Removidas);
@@ -48,7 +52,7 @@ public sealed class CancelamentoExecucaoTests(PostgresFixture postgres)
         Assert.Equal(1, await ambiente.Fabrica.NoBancoAsync(db => db.EventosProcessados.Where(e => e.EventId == eventId).CountAsync()));
         var saida = Assert.Single(await SaidaAsync(ambiente));
         Assert.Equal((DestinosEvento.OsService, "execucao.cancelada.v1", (DateTimeOffset?)null), (saida.Destino, saida.Tipo, saida.EnviadoEm));
-        Assert.Equal(Esperado(saida, "execucao.cancelada.v1", correlacao.ToString(), ordem.OrdemServicoId, ordem.Id, null), saida.Conteudo);
+        Assert.Equal(Esperado(saida, "execucao.cancelada.v1", correlacao.ToString(), ordem.OrdemServicoId, ordem.Id, null), SemTrace(saida.Conteudo));
         AssertEntregaSemAlerta(ambiente, mensagem);
     }
 
@@ -70,7 +74,7 @@ public sealed class CancelamentoExecucaoTests(PostgresFixture postgres)
         Assert.Equal([(1, "Checar suspensão", "mec-1"), (2, "Trocar amortecedor", "mec-2")], salva.Etapas.OrderBy(e => e.Sequencia).Select(e => (e.Sequencia, e.Descricao, e.Responsavel)).ToArray());
         var saida = Assert.Single(await SaidaAsync(ambiente));
         Assert.Equal("execucao.cancelada.v1", saida.Tipo);
-        Assert.Equal(Esperado(saida, "execucao.cancelada.v1", null, ordem.OrdemServicoId, ordem.Id, null), saida.Conteudo);
+        Assert.Equal(Esperado(saida, "execucao.cancelada.v1", null, ordem.OrdemServicoId, ordem.Id, null), SemTrace(saida.Conteudo));
         AssertEntregaSemAlerta(ambiente, mensagem);
     }
 
@@ -102,7 +106,7 @@ public sealed class CancelamentoExecucaoTests(PostgresFixture postgres)
         Assert.Equal((EstadoExecucao.Concluida, antes.Revisao, (string?)null, (DateTimeOffset?)null), (depois.Estado, depois.Revisao, depois.MotivoCancelamento, depois.CanceladaEm));
         var saida = Assert.Single(await SaidaAsync(ambiente));
         Assert.Equal("execucao.cancelamento-recusado.v1", saida.Tipo);
-        Assert.Equal(Esperado(saida, "execucao.cancelamento-recusado.v1", correlacao.ToString(), ordem.OrdemServicoId, ordem.Id, "Execução já concluída não pode ser cancelada."), saida.Conteudo);
+        Assert.Equal(Esperado(saida, "execucao.cancelamento-recusado.v1", correlacao.ToString(), ordem.OrdemServicoId, ordem.Id, "Execução já concluída não pode ser cancelada."), SemTrace(saida.Conteudo));
         Assert.Equal(1, await ambiente.Fabrica.NoBancoAsync(db => db.EventosProcessados.Where(e => e.EventId == eventId).CountAsync()));
         AssertEntregaSemAlerta(ambiente, mensagem);
     }
@@ -126,7 +130,7 @@ public sealed class CancelamentoExecucaoTests(PostgresFixture postgres)
         Assert.Equal([(1, "Checar suspensão", "mec-1"), (2, "Trocar amortecedor", "mec-2")], salva.Etapas.OrderBy(e => e.Sequencia).Select(e => (e.Sequencia, e.Descricao, e.Responsavel)).ToArray());
         var saida = Assert.Single(await SaidaAsync(ambiente));
         Assert.Equal("execucao.cancelada.v1", saida.Tipo);
-        Assert.Equal(Esperado(saida, "execucao.cancelada.v1", correlacao.ToString(), ordem.OrdemServicoId, ordem.Id, null), saida.Conteudo);
+        Assert.Equal(Esperado(saida, "execucao.cancelada.v1", correlacao.ToString(), ordem.OrdemServicoId, ordem.Id, null), SemTrace(saida.Conteudo));
 
         using var supervisor = ambiente.Fabrica.Cliente("Administrador");
         var resposta = await supervisor.PostAsJsonAsync($"/api/v1/execucoes/{ordem.Id}/reexecucao", new { motivo = "Tentar de novo" });
@@ -146,7 +150,7 @@ public sealed class CancelamentoExecucaoTests(PostgresFixture postgres)
 
         Assert.Equal(0, await ambiente.Fabrica.NoBancoAsync(db => db.Ordens.CountAsync()));
         var saida = Assert.Single(await SaidaAsync(ambiente));
-        Assert.Equal(Esperado(saida, "execucao.cancelamento-recusado.v1", correlacao.ToString(), os, null, "Execução da OS não encontrada."), saida.Conteudo);
+        Assert.Equal(Esperado(saida, "execucao.cancelamento-recusado.v1", correlacao.ToString(), os, null, "Execução da OS não encontrada."), SemTrace(saida.Conteudo));
         Assert.Equal(1, await ambiente.Fabrica.NoBancoAsync(db => db.EventosProcessados.Where(e => e.EventId == eventId).CountAsync()));
         AssertEntregaSemAlerta(ambiente, mensagem);
     }
@@ -318,7 +322,7 @@ public sealed class CancelamentoExecucaoTests(PostgresFixture postgres)
 
         var saida = Assert.Single(await SaidaAsync(ambiente));
         Assert.Equal((DestinosEvento.OsService, "execucao.liberacao-recusada.v1"), (saida.Destino, saida.Tipo));
-        Assert.Equal(Esperado(saida, "execucao.liberacao-recusada.v1", correlacao.ToString(), ordem.OrdemServicoId, null, motivo), saida.Conteudo);
+        Assert.Equal(Esperado(saida, "execucao.liberacao-recusada.v1", correlacao.ToString(), ordem.OrdemServicoId, null, motivo), SemTrace(saida.Conteudo));
         Assert.Equal(1, await ambiente.Fabrica.NoBancoAsync(db => db.Ordens.CountAsync()));
         Assert.Equal(concluida ? EstadoExecucao.Concluida : EstadoExecucao.Cancelada, (await ambiente.Fabrica.NoBancoAsync(db => db.Ordens.AsNoTracking().SingleAsync())).Estado);
         Assert.Equal(1, await ambiente.Fabrica.NoBancoAsync(db => db.EventosProcessados.Where(e => e.EventId == eventId).CountAsync()));
@@ -435,7 +439,7 @@ public sealed class CancelamentoExecucaoTests(PostgresFixture postgres)
         Assert.Equal(HttpStatusCode.OK, (await http.PostAsync($"/api/v1/execucoes/{execucaoId}/conclusao", null)).StatusCode);
 
         var saida = await SaidaAsync(ambiente);
-        Assert.Equal([DestinosEvento.Billing, DestinosEvento.OsService], saida.Select(m => m.Destino).Order().ToArray());
+        Assert.Equal([DestinosEvento.Topico], saida.Select(m => m.Destino).Order().ToArray());
         Assert.All(saida, m =>
         {
             var evento = JsonDocument.Parse(m.Conteudo).RootElement;
@@ -477,7 +481,7 @@ public sealed class CancelamentoExecucaoTests(PostgresFixture postgres)
         var evento = JsonDocument.Parse(Assert.Single(await SaidaAsync(ambiente)).Conteudo).RootElement;
         Assert.Equal(JsonValueKind.Null, evento.GetProperty("correlacaoId").ValueKind);
         Assert.Equal(["eventId", "tipo", "correlacaoId", "ocorreuEm", "id", "ordemServicoId", "clienteId", "veiculoId", "motivo", "falhouEm"],
-            evento.EnumerateObject().Select(p => p.Name).ToArray());
+            evento.EnumerateObject().Select(p => p.Name).Where(nome => nome is not ("traceparent" or "tracestate")).ToArray());
     }
 
     [Fact]

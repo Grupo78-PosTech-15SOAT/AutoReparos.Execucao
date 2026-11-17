@@ -26,6 +26,12 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 https://sqs.{{ $raiz.Values.aws.regiao }}.amazonaws.com/{{ $raiz.Values.aws.conta }}/{{ index . 1 }}
 {{- end }}
 
+{{/* ARN de um tópico SNS do serviço na conta e região do deploy (D-67). */}}
+{{- define "servico.topico" -}}
+{{- $raiz := index . 0 -}}
+arn:aws:sns:{{ $raiz.Values.aws.regiao }}:{{ $raiz.Values.aws.conta }}:{{ index . 1 }}
+{{- end }}
+
 {{/* Connection string do serviço, lida do Secret <servico>-database criado pelo job deploy. */}}
 {{- define "servico.conexao" -}}
 - name: {{ .Values.database.variavel }}

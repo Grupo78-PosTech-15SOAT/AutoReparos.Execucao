@@ -16,6 +16,7 @@ var otlpEndpoint = builder.Configuration["Telemetry:OtlpEndpoint"] ?? "http://lo
 builder.Services.AddOpenTelemetry()
     .ConfigureResource(resource => TelemetriaExecucao.Configurar(resource, serviceName, builder.Environment.EnvironmentName))
     .WithTracing(tracing => tracing
+        .AddSource("AutoReparos.Execucao.Mensageria")
         .AddAspNetCoreInstrumentation()
         .AddHttpClientInstrumentation()
         .AddOtlpExporter(options => options.Endpoint = new Uri(otlpEndpoint)))
@@ -41,6 +42,7 @@ builder.Services.AddScoped<EstoqueService>();
 builder.Services.AddScoped<ReprocessadorDlq>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<IAmazonSQS, AmazonSQSClient>();
+builder.Services.AddSingleton<Amazon.SimpleNotificationService.IAmazonSimpleNotificationService, Amazon.SimpleNotificationService.AmazonSimpleNotificationServiceClient>();
 builder.Services.AddSingleton<IAlertSink, LoggingAlertSink>();
 builder.Services.AddSingleton(PoliticaRetentativa.Padrao);
 builder.Services.AddSingleton<PublicadorSqsEventos>();

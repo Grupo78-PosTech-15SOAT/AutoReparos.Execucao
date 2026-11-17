@@ -30,6 +30,12 @@
         "arn:aws:sqs:${regiao}:${conta}:autoreparos-os-saga",
         "arn:aws:sqs:${regiao}:${conta}:autoreparos-cobranca-execucoes"
       ]
+    },
+    {
+      "Sid": "PublicarNoTopicoDeEventos",
+      "Effect": "Allow",
+      "Action": "sns:Publish",
+      "Resource": "arn:aws:sns:${regiao}:${conta}:autoreparos-execucao-eventos"
     }
   ]
 }

@@ -14,7 +14,7 @@ public sealed class ConclusaoExecucaoTests(PostgresFixture postgres)
     private static string Conclusao(Guid id) => $"/api/v1/execucoes/{id}/conclusao";
 
     [Fact]
-    public async Task ExecutionCompletion_WritesOneOutboxRowPerConsumerWithSameEventId()
+    public async Task ExecutionCompletion_WritesOneOutboxRowPerEventForTheTopic()
     {
         using var ambiente = await Ambiente.CriarAsync(postgres);
         var ordem = await ambiente.Fabrica.SemearAsync(o => o.RegistrarEtapa(TipoEtapa.Reparo, "Troca de óleo", "mec-1", DateTimeOffset.UtcNow));
@@ -31,7 +31,7 @@ public sealed class ConclusaoExecucaoTests(PostgresFixture postgres)
         var salva = await ambiente.Fabrica.NoBancoAsync(db => db.Ordens.SingleAsync());
         Assert.Equal((EstadoExecucao.Concluida, momento), (salva.Estado, salva.ConcluidaEm));
         var saida = (await ambiente.Fabrica.NoBancoAsync(db => db.MensagensSaida.ToListAsync())).OrderBy(m => m.Destino).ToList();
-        Assert.Equal([DestinosEvento.Billing, DestinosEvento.OsService], saida.Select(m => m.Destino).ToArray());
+        Assert.Equal([DestinosEvento.Topico], saida.Select(m => m.Destino).ToArray());
         Assert.All(saida, m =>
         {
             Assert.Equal("execucao.concluida.v1", m.Tipo);
@@ -45,7 +45,6 @@ public sealed class ConclusaoExecucaoTests(PostgresFixture postgres)
             Assert.Equal(ordem.VeiculoId, evento.GetProperty("veiculoId").GetGuid());
             Assert.Equal(momento, evento.GetProperty("concluidaEm").GetDateTimeOffset());
         });
-        Assert.Equal(saida[0].EventId, saida[1].EventId);
     }
 
     [Fact]
@@ -67,7 +66,7 @@ public sealed class ConclusaoExecucaoTests(PostgresFixture postgres)
         Assert.Equal(0, await ambiente.Fabrica.NoBancoAsync(db => db.MensagensSaida.CountAsync()));
         Assert.Equal(HttpStatusCode.OK, (await mecanico.PostAsync(Conclusao(emExecucao.Id), null)).StatusCode);
         Assert.Equal(HttpStatusCode.Conflict, (await mecanico.PostAsync(Conclusao(emExecucao.Id), null)).StatusCode);
-        Assert.Equal(2, await ambiente.Fabrica.NoBancoAsync(db => db.MensagensSaida.CountAsync()));
+        Assert.Equal(1, await ambiente.Fabrica.NoBancoAsync(db => db.MensagensSaida.CountAsync()));
     }
 
     [Fact]
@@ -82,6 +81,6 @@ public sealed class ConclusaoExecucaoTests(PostgresFixture postgres)
         ambiente.Gate.Armar(0);
 
         Assert.Equal([200, 409], respostas.Select(r => (int)r.StatusCode).Order().ToArray());
-        Assert.Equal(2, await ambiente.Fabrica.NoBancoAsync(db => db.MensagensSaida.CountAsync()));
+        Assert.Equal(1, await ambiente.Fabrica.NoBancoAsync(db => db.MensagensSaida.CountAsync()));
     }
 }

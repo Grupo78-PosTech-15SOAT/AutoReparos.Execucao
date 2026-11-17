@@ -144,7 +144,7 @@ public sealed class ReservaInsumosTests(PostgresFixture postgres)
         Assert.Equal((6, 0), Saldo(await ambiente.Fabrica.InsumoAsync(oleo.Id)));
         Assert.Equal(StatusReserva.Confirmada, Assert.Single(await ReservasAsync(ambiente, ordem.OrdemServicoId)).Status);
         var saida = await SaidaAsync(ambiente);
-        Assert.Equal(2, saida.Count(m => m.Tipo == "execucao.concluida.v1"));
+        Assert.Equal(1, saida.Count(m => m.Tipo == "execucao.concluida.v1"));
 
         // Concluir uma OS sem reserva continua válido e não altera saldo.
         var semReserva = await ambiente.Fabrica.SemearAsync(o => o.RegistrarEtapa(TipoEtapa.Reparo, "Revisão", "mec-1", DateTimeOffset.UtcNow));

@@ -1,4 +1,3 @@
-using System.Text.Json;
 using AutoReparos.Execucao.Domain;
 
 namespace AutoReparos.Execucao.Application;
@@ -23,6 +22,8 @@ public static class DestinosEvento
 {
     public const string OsService = "os-service";
     public const string Billing = "billing";
+    /// <summary>Evento publicado uma vez no tópico <c>autoreparos-execucao-eventos</c> (D-67); os consumidores assinam por <c>tipo</c>.</summary>
+    public const string Topico = "topico";
 }
 
 public enum ResultadoRecebimento { Enfileirada, Duplicada, Recusada }
@@ -173,9 +174,9 @@ public sealed class ExecucaoService(IExecucaoStore store, TimeProvider relogio)
         var reservas = (await store.ListarReservasAsync(ordem.OrdemServicoId, ct)).Where(r => r.Status == StatusReserva.Reservada).ToList();
         foreach (var reserva in reservas) reserva.Confirmar(agora);
         await store.BaixarReservadoAsync(reservas, ct);
-        // Mesmo eventId para os dois consumidores; cada destino tem sua própria linha no outbox.
+        // Uma linha por evento (D-67): o tópico entrega a cada consumidor que assina execucao.concluida.v1.
         var eventId = Guid.NewGuid();
-        var conteudo = JsonSerializer.Serialize(new
+        var conteudo = ContextoTrace.Serializar(new
         {
             eventId,
             tipo = TiposEvento.ExecucaoConcluida,
@@ -187,8 +188,7 @@ public sealed class ExecucaoService(IExecucaoStore store, TimeProvider relogio)
             veiculoId = ordem.VeiculoId,
             concluidaEm = ordem.ConcluidaEm
         });
-        foreach (var destino in new[] { DestinosEvento.OsService, DestinosEvento.Billing })
-            store.Adicionar(NovaMensagem(eventId, destino, TiposEvento.ExecucaoConcluida, conteudo));
+        store.Adicionar(NovaMensagem(eventId, DestinosEvento.Topico, TiposEvento.ExecucaoConcluida, conteudo));
         await store.SalvarAsync(ct);
         return ordem;
     }
@@ -198,7 +198,7 @@ public sealed class ExecucaoService(IExecucaoStore store, TimeProvider relogio)
         var ordem = await store.ObterAsync(id, ct) ?? throw new KeyNotFoundException();
         ordem.Falhar(motivo, relogio.GetUtcNow());
         var eventId = Guid.NewGuid();
-        var conteudo = JsonSerializer.Serialize(new
+        var conteudo = ContextoTrace.Serializar(new
         {
             eventId,
             tipo = TiposEvento.ExecucaoFalhou,
@@ -238,7 +238,7 @@ public sealed class ExecucaoService(IExecucaoStore store, TimeProvider relogio)
         };
         if (execucaoId is not null) corpo["execucaoId"] = execucaoId;
         if (motivo is not null) corpo["motivo"] = motivo;
-        return NovaMensagem(eventId, DestinosEvento.OsService, tipo, JsonSerializer.Serialize(corpo));
+        return NovaMensagem(eventId, DestinosEvento.OsService, tipo, ContextoTrace.Serializar(corpo));
     }
 
     private MensagemSaida NovaMensagem(Guid eventId, string destino, string tipo, string conteudo) =>
